@@ -1,103 +1,178 @@
-# act2 — Multi-Agent Travel Assistant
+# agenticworkflow
 
-A FastAPI service that answers travel questions (weather + hotel recommendations)
-by routing each user message through a small graph of cooperating LLM agents.
-The agents call tools served by a separate **MCP** (Model Context Protocol)
-server, persist conversations to **MongoDB**, and emit structured traces to
-**MLflow**.
+A multi-agent orchestration framework built on **FastAPI** + **LangGraph**.
+The user sends one prompt; a **Planner** turns it into a directed acyclic
+graph (DAG) of subtasks; an **Orchestrator** runs those subtasks in
+dependency waves; a **Completion Gate** decides whether to keep going or
+re-plan; a **Synthesizer** composes one final answer.
 
----
-
-## What it does
-
-A user sends a chat message like *"What's the weather in Paris?"* to `POST /chat`.
-The request flows through:
-
-1. **RouterAgent** — reads the conversation, extracts `{location, intent}` as
-   JSON, and decides whether to delegate to the weather agent, the hotel agent,
-   or ask the user to clarify.
-2. **WeatherAgent / HotelAgent** — invokes the matching MCP tool
-   (`get_weather` / `get_hotels`) and formats a human-readable reply.
-3. The final answer plus the full message history is written back to MongoDB
-   so the next request in the same `thread_id` continues the conversation.
-
-Every agent step is auto-wrapped in an MLflow span, so you get a per-request
-trace of routing decisions, LLM calls, tool calls, and tool results.
+Agents are registered through a typed **agent registry**, all results land
+on a shared **blackboard**, every component emits **MLflow** spans, and a
+companion **/trace.html** UI animates every phase step-by-step so you can
+watch the pipeline execute.
 
 ---
 
-## Capabilities
+## How a request flows
 
-- **Multi-agent orchestration** via LangGraph (`graph/graph_builder.py`) —
-  conditional edges route the state between router → specialist agent → END.
-- **MCP tool integration** — agents discover and call tools from any MCP
-  server (`sse`, `stdio`, `websocket`, `streamable_http`); a sample server
-  shipping `get_weather` and `get_hotels` lives in `mcp_server/weather_server.py`.
-- **OpenAI / OpenAI-compatible LLMs** — the LLM client is `ChatOpenAI`, so you
-  can point `OPENAI_BASE_URL` at Azure, Groq, Together, or a local
-  OpenAI-compatible endpoint without code changes.
-- **Persistent memory** — MongoDB stores short-term conversation history
-  (24-hour TTL) and long-term per-user facts that are injected into the
-  system prompt on each turn.
-- **Observability** — MLflow tracing + JSON logging via the `Observable`
-  mix-in; spans capture inputs, outputs, exceptions, and named events.
-- **Pluggable permissions** — tools can be filtered per agent / per user role
-  before being bound to the LLM (`baseagent/permissions.py`).
-- **Composable BaseAgent** — `BaseAgent` is a single class wired from three
-  collaborators (`LLMClient`, `MCPClient`, `AgentMemory`). Subclasses set
-  `system_prompt` and `tool_names`, then either override `run()` or call the
-  one-shot `answer_with_tool()` template.
+```
+POST /chat
+   │
+   ▼
+START ──▶ Planner ──▶ Orchestrator ──▶ Gate ──┬──▶ Synthesizer ──▶ END
+                                              │
+                                              └──▶ Planner   (re-plan loop)
+```
+
+1. **Planner** reads the user prompt and the full agent registry, then
+   emits a JSON DAG: `{"subtasks": [{"id","agent_id","args","depends_on"}]}`.
+   The LLM picks which registered agents to call, in what order, and with
+   what args. (`planner/planner_agent.py`)
+2. **Orchestrator** computes dependency waves with Kahn's algorithm and
+   fans each wave out via `asyncio.gather`. Every task result — success
+   or error — is written to a shared blackboard. (`orchestrator/`)
+3. **Completion Gate** inspects the blackboard: all subtasks satisfied?
+   any errors? re-plan budget left (default 3)? Routes back to Planner
+   on partial failure, or forward to Synthesizer otherwise. (`gate/`)
+4. **Synthesizer** reads the whole blackboard, composes one user-facing
+   answer (marking sections `[PARTIAL]` where agents errored), and
+   optionally commits durable fields to Postgres. (`synthesizer/`)
+
+The outer flow is a small LangGraph; the DAG itself executes inside the
+Orchestrator node, so there is no per-request dynamic graph mutation.
+
+---
+
+## Why this shape
+
+| Concern | Solution in this repo |
+| --- | --- |
+| Add a new capability without touching the planner | Drop a `BaseAgent` subclass with an `AgentMeta` block in `agents/`; it auto-registers on import. Planner sees it next request. |
+| Run independent subtasks in parallel | Planner emits `depends_on=[]` on independent tasks; Orchestrator computes waves and runs each wave via `asyncio.gather`. |
+| Recover from a transient agent failure | Gate sees the error entry on the blackboard, routes back to Planner with a snapshot + reason. Capped by `max_replans`. |
+| Audit who said what | Every node/agent run is wrapped in an MLflow span tagged with `run_id`, `agent_id`, `version`. |
+| See execution end-to-end | Open `/trace.html`, type a prompt, step through Planner → Orchestrator → Gate → Synthesizer with the actual blackboard state visible at each phase. |
+
+---
+
+## Agent registry
+
+Every agent declares an `AgentMeta` block:
+
+```python
+# agents/weather_agent.py
+META = AgentMeta(
+    agent_id="weather",
+    version="1.0.0",
+    capability_tags=["weather", "forecast", "city"],
+    description="Reports current weather conditions for a named city.",
+    input_schema={"location": FieldSpec(type="string", required=True)},
+    output_schema={"text": FieldSpec(type="string")},
+    sla_ms=4000,
+)
+register(META, WeatherAgent)
+```
+
+The Planner renders this menu into its system prompt so the LLM can match
+the user's intent to the right agent. To add a new agent: write the class,
+write the `META`, call `register()`, import the module in
+`graph/graph_builder.py`. That's it.
+
+---
+
+## Memory backends
+
+| Store | Purpose | Required? |
+| --- | --- | --- |
+| **MongoDB** | Short-term message history (24h TTL) + long-term per-thread facts | Yes |
+| **Redis** | Hot blackboard mirror keyed by `bb:{thread_id}:{run_id}:{task_id}` with TTL | No — no-ops when `REDIS_URL` unset |
+| **Postgres** | Durable commits for `output_schema` fields marked `persist=true`; audit + entity_links tables | No — no-ops when `POSTGRES_DSN` unset |
+
+Redis and Postgres are intentionally optional: the framework runs end-to-end
+with just MongoDB. Tables are created automatically on Postgres startup.
 
 ---
 
 ## HTTP API
 
-| Method | Path                  | Purpose                                      |
-| ------ | --------------------- | -------------------------------------------- |
-| POST   | `/chat`               | Send a user message; returns the agent reply |
-| GET    | `/health`             | Liveness probe                               |
-| GET    | `/state/{thread_id}`  | Inspect the LangGraph checkpoint for a thread |
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/chat` | Send a prompt; returns `{response, view}` |
+| POST | `/chat/trace` | Same as `/chat` but returns every intermediate node update for the visualization UI |
+| GET | `/registry` | Dump every registered agent with its schema |
+| GET | `/state/{thread_id}` | LangGraph checkpoint snapshot for a thread |
+| GET | `/health` | Liveness probe |
 
 `POST /chat` body:
 
 ```json
-{ "message": "Hotels in Tokyo?", "thread_id": "user-123" }
+{ "message": "Show me the top 5 outages", "thread_id": "user-123" }
 ```
+
+---
+
+## Execution Tracer UI
+
+`/trace.html` is a standalone single-page visualizer that animates every
+request:
+
+- **Planner card** — shows the agent registry the LLM saw (the menu) and
+  the resulting plan (every subtask with id, agent, args, deps).
+- **Orchestrator card** — wave decomposition (Wave 1, Wave 2, …) plus the
+  blackboard table after execution. Green rows = success, red = error.
+- **Gate card** — the SYNTHESIZE / REPLAN decision with reasoning.
+- **Synthesizer card** — final user-facing answer, with `[PARTIAL]` badge
+  if anything errored.
+
+Controls: **Step ▶** advance one phase, **Reveal all**, **Auto-play**,
+**Restart**. Four sample prompts cover single-intent, detail-view, and
+multi-intent fan-out scenarios.
 
 ---
 
 ## Project layout
 
 ```
-act2/
-├─ main.py                 # FastAPI app, /chat handler, graph wiring
-├─ state.py                # AgentState TypedDict (the shared blackboard)
+agenticworkflow/
+├─ main.py                       # FastAPI app, /chat, /chat/trace, /registry
+├─ state.py                      # AgentState TypedDict (shared blackboard)
 ├─ graph/
-│  └─ graph_builder.py     # LangGraph nodes + conditional routing
+│  └─ graph_builder.py           # LangGraph: planner → orchestrator → gate → synthesizer
+├─ planner/
+│  ├─ dag.py                     # Plan, Subtask, wave computation (Kahn's), cycle detection
+│  └─ planner_agent.py           # LLM-based DAG emitter with registry-aware prompt
+├─ orchestrator/
+│  ├─ orchestrator.py            # Runs DAG waves via asyncio.gather, one retry per task
+│  └─ blackboard.py              # In-memory + Redis-mirrored shared workspace
+├─ gate/
+│  └─ completion_gate.py         # Done? Errors? Re-plan budget left?
+├─ synthesizer/
+│  └─ synthesizer.py             # Merges blackboard → one answer; commits persistable fields
+├─ registry/
+│  ├─ agent_meta.py              # AgentMeta + FieldSpec pydantic models
+│  └─ registry.py                # Process-wide AGENT_REGISTRY + register/get/match helpers
 ├─ agents/
-│  ├─ router_agent.py      # JSON-only intent + location extractor
-│  ├─ weather_agent.py     # Calls MCP `get_weather`
-│  └─ hotel_agent.py       # Calls MCP `get_hotels`
-├─ baseagent/              # Reusable agent core (composition, not mixins)
-│  ├─ base_agent.py        # BaseAgent: orchestration + state helpers
-│  ├─ llm_client.py        # ChatOpenAI wrapper + tool execution
-│  ├─ mcp_client.py        # MCP config + tool loading + result unwrapping
-│  ├─ agent_memory.py      # Sliding-window trim + long-term fact persistence
-│  ├─ permissions.py       # Role-based tool filtering (override per agent)
-│  └─ events.py            # Log/event name constants
-├─ mcp_server/
-│  └─ weather_server.py    # Sample MCP server (get_weather, get_hotels)
-├─ mcpconfig/mcp_config.py # MCP transport / server / agent config models
+│  ├─ weather_agent.py           # Reference agent: weather report by city
+│  └─ outage_agent.py            # Reference agent: grid-outage list / detail view
+├─ baseagent/                    # Reusable agent core (composition, not inheritance)
+│  ├─ base_agent.py              # BaseAgent + answer_with helpers
+│  ├─ llm_client.py              # ChatOpenAI wrapper + tool execution
+│  ├─ mcp_client.py              # MCP transport + tool loading
+│  ├─ agent_memory.py            # Sliding-window message trim + fact persistence
+│  └─ events.py                  # Event name constants
 ├─ memory/
-│  ├─ memory.py            # LangGraph in-memory checkpointer + thread config
-│  └─ mongo_store.py       # MongoDB-backed short-term + long-term store
+│  ├─ mongo_store.py             # MongoDB short-term + long-term store
+│  ├─ redis_store.py             # Optional hot blackboard mirror
+│  └─ postgres_store.py          # Optional durable commit + entity_links store
 ├─ observability/
-│  ├─ observable.py        # Observable base class + MLflow span auto-wrapping
-│  ├─ mlflow_setup.py      # MLflow init
-│  └─ logging.py           # JSON logger + MLflow span log handler
-├─ frontend/               # Static UI mounted at /
-├─ run.bat / kill.bat      # Windows launch + shutdown scripts
-└─ requirements.txt
+│  ├─ observable.py              # Observable base + MLflow span auto-wrapping
+│  └─ mlflow_setup.py            # MLflow init
+├─ mcp_server/
+│  └─ weather_server.py          # Local MCP server: get_weather + outage tools
+├─ frontend/
+│  ├─ index.html                 # Chat UI
+│  └─ trace.html                 # Step-by-step execution tracer UI
+└─ docs/PLAN_PLANNER_ORCHESTRATOR.md
 ```
 
 ---
@@ -107,9 +182,9 @@ act2/
 ### Prerequisites
 
 - Python 3.11+
-- A running MongoDB instance (defaults to `mongodb://localhost:27017`)
-- An OpenAI API key (or any OpenAI-compatible endpoint)
-- Optional: an MLflow tracking server for persisted traces
+- A running MongoDB (defaults to `mongodb://localhost:27017`)
+- An OpenAI API key (or any OpenAI-compatible endpoint via `OPENAI_BASE_URL`)
+- Optional: MLflow, Redis, Postgres
 
 ### Install
 
@@ -123,69 +198,82 @@ pip install -r requirements.txt
 
 ```powershell
 Copy-Item .env.example .env
-# Edit .env and set OPENAI_API_KEY, MONGODB_URI, MLFLOW_TRACKING_URI, etc.
+# Edit .env: set OPENAI_API_KEY at minimum
 ```
 
 Key environment variables:
 
-| Variable               | Purpose                                                                |
-| ---------------------- | ---------------------------------------------------------------------- |
-| `OPENAI_API_KEY`       | Required. API key for the LLM.                                         |
-| `OPENAI_MODEL`         | Model name (default `gpt-4o-mini`).                                    |
-| `OPENAI_BASE_URL`      | Optional override for OpenAI-compatible providers.                     |
-| `MCP_SERVER_URL`       | MCP server URL. Leave empty to disable MCP tool loading entirely.      |
-| `MCP_TRANSPORT`        | `sse` \| `stdio` \| `websocket` \| `streamable_http`.                  |
-| `MCP_AUTH_TOKEN`       | Optional bearer token sent as `Authorization` to the MCP server.       |
-| `MONGODB_URI`          | MongoDB connection string.                                             |
-| `MLFLOW_TRACKING_URI`  | MLflow server URL. Without it, tracing is a no-op.                     |
+| Variable | Purpose |
+| --- | --- |
+| `OPENAI_API_KEY` | Required. API key for the LLM. |
+| `OPENAI_MODEL` | Defaults to `gpt-4o-mini`. |
+| `OPENAI_BASE_URL` | Optional override for OpenAI-compatible providers. |
+| `MCP_SERVER_URL` | MCP server URL. Leave empty to skip MCP tool loading. |
+| `MCP_TRANSPORT` | `sse` \| `stdio` \| `websocket` \| `streamable_http`. |
+| `MCP_AUTH_TOKEN` | Optional bearer token for the MCP server. |
+| `MONGODB_URI` | MongoDB connection string. |
+| `MLFLOW_TRACKING_URI` | MLflow server URL. Use a `file://` URI to keep it local. |
+| `REDIS_URL` | Optional; enables hot blackboard mirror. |
+| `POSTGRES_DSN` | Optional; enables durable commit store. |
 
 ### Run
 
-On Windows, `run.bat` launches both the MCP server and the FastAPI app in
-separate windows:
+Two processes — the MCP tool server and the FastAPI app:
 
 ```powershell
-.\run.bat
-```
-
-Or manually:
-
-```powershell
-# Terminal 1 — MCP tool server on :8001
+# Terminal 1 — MCP server on :8001
 python -m mcp_server.weather_server
 
 # Terminal 2 — FastAPI app on :8000
-python -m uvicorn main:app --host 0.0.0.0 --port 8000
+python main.py
 ```
 
-Open <http://127.0.0.1:8000> for the static frontend, or POST directly to
-`/chat`.
+Then open:
 
-### Stop
-
-```powershell
-.\kill.bat
-```
+- <http://127.0.0.1:8000> — chat UI
+- <http://127.0.0.1:8000/trace.html> — execution tracer (recommended starting point)
 
 ---
 
 ## Extending
 
-**Add a new specialist agent**
+### Add a new agent
 
 1. Create `agents/my_agent.py` inheriting from `BaseAgent`.
-2. Set `system_prompt` and `tool_names = ["my_mcp_tool"]`.
-3. Implement `run(state)` — or call `self.answer_with_tool(...)` for the
-   one-shot template used by `WeatherAgent` / `HotelAgent`.
-4. Register the node and a routing branch in `graph/graph_builder.py`.
+2. Set `system_prompt` and (optionally) `tool_names`.
+3. Implement `run(state)` — or call `self.answer_with_tool(...)` /
+   `self.answer_with(...)` for the one-shot template.
+4. Declare a module-level `META = AgentMeta(...)` and call
+   `register(META, MyAgent)` at the bottom of the file.
+5. Add `import agents.my_agent` to `graph/graph_builder.py` so the
+   module loads (and self-registers) at startup.
 
-**Add a new MCP tool**
+The Planner will pick up the new agent on the next request — no planner
+code change required.
 
-Add an `@mcp.tool()`-decorated function to `mcp_server/weather_server.py`
-(or stand up a separate MCP server and point `MCP_SERVER_URL` at it). The
-agent declaring it in `tool_names` will pick it up at startup.
+### Add a new MCP tool
 
-**Use a different LLM provider**
+Add an `@mcp.tool()`-decorated function to
+`mcp_server/weather_server.py` (or stand up a separate MCP server and
+point `MCP_SERVER_URL` at it). Any agent that names the tool in its
+`tool_names` list will get it bound automatically.
 
-Set `OPENAI_BASE_URL` and (if needed) `OPENAI_MODEL` — any OpenAI-compatible
-endpoint works without code changes.
+### Use a different LLM provider
+
+Set `OPENAI_BASE_URL` and (if needed) `OPENAI_MODEL` — any
+OpenAI-compatible endpoint works without code changes.
+
+---
+
+## Observability
+
+Every Planner, Orchestrator, Gate, Synthesizer, and Agent invocation is
+auto-wrapped in an MLflow span by the `Observable` base class
+(`observability/observable.py`). Spans capture:
+
+- `run_id` — the per-request UUID propagated through every step
+- `agent_id`, `agent_version`, `wave`, `retry_count` (on agent spans)
+- structured events for tool calls, blackboard writes, gate decisions
+
+Point `MLFLOW_TRACKING_URI` at a tracking server to persist traces, or
+use a `file:///path/to/mlruns_local` URI for local-only tracing.
