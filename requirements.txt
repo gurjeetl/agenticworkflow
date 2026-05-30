@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+langchain
+langgraph
+langchain-mcp-adapters
+langchain-openai
+langchain-core
+python-dotenv
+motor
+
+# --- Observability ---
+mlflow>=2.16
+psycopg2-binary  # PostgreSQL driver for the MLflow tracking server backend

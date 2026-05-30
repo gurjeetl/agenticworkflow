@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Agent Architecture — Stakeholder View</title>
+<style>
+  :root {
+    --bg: #f7f8fb;
+    --ink: #1f2937;
+    --muted: #6b7280;
+    --base: #2563eb;
+    --base-soft: #dbeafe;
+    --derived: #16a34a;
+    --derived-soft: #dcfce7;
+    --memory: #d97706;
+    --memory-soft: #fef3c7;
+    --benefit: #7c3aed;
+    --benefit-soft: #ede9fe;
+    --line: #94a3b8;
+    --card: #ffffff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    padding: 2rem;
+    max-width: 1500px;
+    margin: auto;
+    line-height: 1.45;
+  }
+  h1 { color: var(--ink); margin: 0 0 0.25rem; font-size: 1.7rem; }
+  .subtitle { color: var(--muted); margin: 0 0 1.5rem; font-size: 0.95rem; }
+
+  .stage {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 1.1rem;
+    align-items: stretch;
+    margin-bottom: 2rem;
+  }
+
+  .box {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 1rem;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+    border-top: 4px solid var(--line);
+    position: relative;
+  }
+  .box.base    { border-top-color: var(--base); }
+  .box.memory  { border-top-color: var(--memory); }
+  .box.derived { border-top-color: var(--derived); }
+
+  .box h2 {
+    margin: 0 0 0.2rem;
+    font-size: 0.95rem;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 0.6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    color: white;
+  }
+  .badge.base    { background: var(--base); }
+  .badge.memory  { background: var(--memory); }
+  .badge.derived { background: var(--derived); }
+
+  .box p.role { color: var(--muted); font-size: 0.75rem; margin: 0 0 0.75rem; }
+
+  ul.caps { list-style: none; padding: 0; margin: 0; }
+  ul.caps li {
+    padding: 0.35rem 0.55rem;
+    margin-bottom: 0.3rem;
+    border-radius: 6px;
+    font-size: 0.78rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+  }
+  .box.base    ul.caps li { background: var(--base-soft); }
+  .box.memory  ul.caps li { background: var(--memory-soft); }
+  .box.derived ul.caps li { background: var(--derived-soft); }
+  ul.caps li .dot {
+    flex: 0 0 6px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-top: 0.55rem;
+  }
+  .box.base    ul.caps li .dot { background: var(--base); }
+  .box.memory  ul.caps li .dot { background: var(--memory); }
+  .box.derived ul.caps li .dot { background: var(--derived); }
+
+  .arrows {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 1.1rem;
+    margin: -1rem 0 1.5rem;
+  }
+  .arrow {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.75rem;
+    font-style: italic;
+  }
+  .arrow .glyph { font-size: 1.2rem; color: var(--line); }
+
+  .code-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 1.1rem;
+    margin-bottom: 2rem;
+    align-items: stretch;
+  }
+  .code-callout {
+    grid-column: span 2;
+    background: var(--base-soft);
+    border-left: 4px solid var(--base);
+    border-radius: 10px;
+    padding: 1rem 1.1rem;
+    color: var(--ink);
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+  .code-callout strong { color: var(--base); }
+  .code-callout .lede {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0 0 0.6rem;
+    color: var(--ink);
+  }
+  .code-callout ul {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 0.75rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25rem 0.9rem;
+  }
+  .code-callout ul li {
+    font-size: 0.82rem;
+    padding-left: 1rem;
+    position: relative;
+  }
+  .code-callout ul li::before {
+    content: "✓";
+    color: var(--base);
+    font-weight: 700;
+    position: absolute;
+    left: 0;
+    top: 0;
+  }
+  .code-callout .closing {
+    font-size: 0.82rem;
+    color: var(--muted);
+    font-style: italic;
+    margin: 0;
+  }
+  .code-block {
+    background: #0f172a;
+    color: #e2e8f0;
+    border-radius: 10px;
+    padding: 0.85rem 0.9rem;
+    overflow: auto;
+    border-top: 4px solid var(--derived);
+  }
+  .code-block h3 {
+    margin: 0 0 0.5rem;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #94a3b8;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .code-block pre {
+    margin: 0;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .code-block .kw  { color: #c084fc; }
+  .code-block .cls { color: #fbbf24; }
+  .code-block .str { color: #86efac; }
+  .code-block .fn  { color: #7dd3fc; }
+  .code-block .com { color: #64748b; font-style: italic; }
+
+  .benefits {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 1.75rem 2rem;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+    border-left: 5px solid var(--benefit);
+  }
+  .benefits h2 {
+    margin: 0 0 1rem;
+    color: var(--benefit);
+    font-size: 1.2rem;
+  }
+  .benefit-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.9rem;
+  }
+  .benefit {
+    background: var(--benefit-soft);
+    padding: 0.85rem 1rem;
+    border-radius: 10px;
+    font-size: 0.92rem;
+  }
+  .benefit strong { color: var(--benefit); }
+
+  .footer-note {
+    margin-top: 2rem;
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+</style>
+</head>
+<body>
+
+<h1>Base Agent Features</h1>
+<p class="subtitle">How every domain agent (Weather, Hotel) reuses one shared engine.</p>
+
+<div class="stage">
+
+  <!-- BASE AGENT -->
+  <div class="box base">
+    <h2><span class="badge base">Base</span> BaseAgent</h2>
+    <p class="role">The shared engine. Built once, used by every agent.</p>
+    <ul class="caps">
+      <li><span class="dot"></span>Talks to the LLM </li>
+      <li><span class="dot"></span>Discovers &amp; calls external tools (MCP)</li>
+      <li><span class="dot"></span>Enforces user permissions on tools</li>
+      <li><span class="dot"></span>Reads &amp; writes shared memory &amp; state</li>
+      <li><span class="dot"></span>Tracks iterations &amp; stops runaway loops</li>
+      <li><span class="dot"></span>Emits traces &amp; logs (MLflow)</li>
+      <li><span class="dot"></span>Handles errors &amp; final responses</li>
+      
+    </ul>
+  </div>
+
+  <!-- SHARED MEMORY -->
+  <div class="box memory">
+    <h2><span class="badge memory">Shared</span> Conversation Context</h2>
+    <p class="role">How  Weather → Hotel hand off data within one request.</p>
+    <ul class="caps">
+      <li><span class="dot"></span><strong>Remembers:</strong> recent messages in this chat</li>
+      <li><span class="dot"></span><strong>Persists:</strong> user facts across sessions (MongoDB)</li>
+      <li><span class="dot"></span><strong>Tracks:</strong> which agent is up next</li>
+      <li><span class="dot"></span><strong>Guards:</strong> iteration count, completion, errors</li>
+    </ul>
+  </div>
+
+  <!-- DERIVED — WEATHER -->
+  <div class="box derived">
+    <h2><span class="badge derived">Derived</span> WeatherAgent</h2>
+    <p class="role">A specialist — same engine, its own persona &amp; tool.</p>
+    <ul class="caps">
+      <li><span class="dot"></span>Persona: weather reporter</li>
+      <li><span class="dot"></span>Calls one MCP tool (<code>get_weather</code>)</li>
+      <li><span class="dot"></span>Formats the tool's reply for the user</li>
+      <li><span class="dot"></span><em>Inherits everything else from BaseAgent</em></li>
+    </ul>
+  </div>
+
+  <!-- DERIVED — HOTEL -->
+  <div class="box derived">
+    <h2><span class="badge derived">Derived</span> HotelAgent</h2>
+    <p class="role">Another specialist — same engine, different persona &amp; tool.</p>
+    <ul class="caps">
+      <li><span class="dot"></span>Persona: hotel concierge</li>
+      <li><span class="dot"></span>Calls one MCP tool (<code>get_hotels</code>)</li>
+      <li><span class="dot"></span>Formats the tool's reply for the user</li>
+      <li><span class="dot"></span><em>Inherits everything else from BaseAgent</em></li>
+    </ul>
+  </div>
+
+</div>
+
+<!-- CODE ROW — actual specialist source -->
+<div class="code-row">
+
+  <div class="code-callout">
+    <div class="lede"><strong>BaseAgent</strong> handles all of this:</div>
+    <ul>
+      <li>LLM calls</li>
+      <li>MCP tool discovery &amp; invocation</li>
+      <li>Permission checks on tools</li>
+      <li>Iteration &amp; loop control</li>
+      <li>Error handling</li>
+      <li>Memory &amp; state management</li>
+      <li>Logging &amp; MLflow tracing</li>
+      <li>Final-response formatting</li>
+    </ul>
+    <p class="closing">Each specialist on the right just adds its persona and tool → </p>
+  </div>
+
+  <div class="code-block">
+    <h3>Entire WeatherAgent file — ~12 lines</h3>
+<pre><span class="kw">class</span> <span class="cls">WeatherAgent</span>(<span class="cls">BaseAgent</span>):
+    system_prompt = <span class="str">"You are a helpful weather reporter."</span>
+    tool_names = [<span class="str">"get_weather"</span>]
+
+    <span class="kw">def</span> <span class="fn">run</span>(<span class="kw">self</span>, state):
+        city = (state.get(<span class="str">"location"</span>) <span class="kw">or</span> <span class="str">""</span>).lower().strip()
+        <span class="kw">return</span> <span class="kw">self</span>.answer_with_tool(
+            state,
+            tool_name=<span class="str">"get_weather"</span>,
+            args={<span class="str">"city"</span>: city},
+            format_text=<span class="kw">lambda</span> r: <span class="str">f"Weather for {city.title()}: {r}"</span>,
+        )</pre>
+  </div>
+
+  <div class="code-block">
+    <h3>Entire HotelAgent file — ~12 lines</h3>
+<pre><span class="kw">class</span> <span class="cls">HotelAgent</span>(<span class="cls">BaseAgent</span>):
+    system_prompt = <span class="str">"You are a helpful hotel concierge."</span>
+    tool_names = [<span class="str">"get_hotels"</span>]
+
+    <span class="kw">def</span> <span class="fn">run</span>(<span class="kw">self</span>, state):
+        city = (state.get(<span class="str">"location"</span>) <span class="kw">or</span> <span class="str">""</span>).lower().strip()
+        <span class="kw">return</span> <span class="kw">self</span>.answer_with_tool(
+            state,
+            tool_name=<span class="str">"get_hotels"</span>,
+            args={<span class="str">"city"</span>: city},
+            format_text=<span class="kw">lambda</span> r: <span class="str">f"Top hotels in {city.title()}: {r}"</span>,
+        )</pre>
+  </div>
+
+</div>
+
+</body>
+</html>
