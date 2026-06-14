@@ -8,6 +8,33 @@ langchain-core
 python-dotenv
 motor
 
+# --- Remote agents (registry/discovery service + agent services) ---
+httpx
+
+# --- Optional stores (activate via env; no-op when unset) ---
+# Redis: hot blackboard mirror. Enabled only when REDIS_URL is set.
+redis>=4.2
+# Milvus: semantic long-term memory (vector store). Enabled only when MILVUS_URI is set.
+# The [milvus_lite] extra bundles an embedded engine so a local file URI
+# (MILVUS_URI=./milvus_local.db) works with no server/Docker — incl. Windows.
+pymilvus[milvus_lite]>=2.4
+
+# --- Security (REQUIRED: mandatory input/output content guard) ---
+# LLM Guard runs local models (prompt-injection, toxicity, PII/secrets,
+# ban-topics). Not optional — the app fails to start if it can't load.
+# Heavy: pulls torch, transformers, spacy, presidio. CPU-only is fine.
+# The default PyTorch CPU backend benchmarked faster than ONNX here, so ONNX is an
+# opt-in (LLM_GUARD_USE_ONNX=1) — only worthwhile with quantized models. To use it,
+# install the extra: pip install "llm-guard[onnxruntime]".
+llm-guard>=0.3.15
+
+# --- Router intent classifier (local, CPU) ---
+# Small sentence-transformers model (all-MiniLM-L6-v2, ~80MB, Apache-2.0) for
+# embedding-based multi-intent detection so the Router can skip its LLM call on
+# clearly multi-agent prompts. Reuses the torch/transformers llm-guard already pulls.
+# Disable with ROUTER_INTENT_CLASSIFIER=0 (falls back to the regex signal).
+sentence-transformers>=2.7
+
 # --- Observability ---
 mlflow>=2.16
 psycopg2-binary  # PostgreSQL driver for the MLflow tracking server backend

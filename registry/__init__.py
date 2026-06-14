@@ -1,18 +1,15 @@
-from registry.agent_meta import AgentMeta, FieldSpec
-from registry.registry import (
-    AGENT_REGISTRY,
-    get,
-    list_active,
-    match_by_capability,
-    register,
+from registry.agent_meta import AgentMeta, FieldSpec, Skill
+from registry.registry_client import (
+    RegistryClient,
+    RegistryUnavailable,
+    get_registry_client,
 )
 
 __all__ = [
     "AgentMeta",
     "FieldSpec",
-    "AGENT_REGISTRY",
-    "register",
-    "get",
-    "list_active",
-    "match_by_capability",
+    "Skill",
+    "RegistryClient",
+    "RegistryUnavailable",
+    "get_registry_client",
 ]

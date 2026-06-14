@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
-import re
+import os
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from baseagent.base_agent import BaseAgent, patch
 from baseagent.events import Events
+from memory.facts_store import get_facts_store
+from memory.vector_store import get_vector_store
 from planner.dag import Plan, Subtask
-from registry import AGENT_REGISTRY, list_active
+from planner.parsing import extract_json, normalize_agent_id, render_capability_menu
+from registry.registry_client import RegistryUnavailable, get_registry_client
 from state import AgentState
 
 _PLAN_SCHEMA_HINT = (
@@ -31,30 +34,61 @@ class PlannerAgent(BaseAgent):
 
     def __init__(self) -> None:
         super().__init__()
-        # System prompt is built per-run so newly-registered agents appear automatically.
+        # System prompt is built per-run so newly-discovered agents appear automatically.
         self.system_prompt = ""
+        self._registry = get_registry_client()
 
     # ------------------------------------------------------------------
-    def _render_capability_menu(self) -> str:
-        lines = []
-        for meta, _cls in list_active():
-            inputs = ", ".join(
-                f"{name}{'*' if spec.required else ''}:{spec.type}"
-                for name, spec in meta.input_schema.items()
-            ) or "(none)"
-            tags = ", ".join(meta.capability_tags) or "(none)"
-            lines.append(
-                f'- agent_id: "{meta.agent_id}"   (use this exact string; the version below is INFO ONLY, do NOT include it)\n'
-                f'    version: {meta.version}\n'
-                f"    capability: {meta.description or '(no description)'}\n"
-                f"    tags: {tags}\n"
-                f"    inputs: {inputs}\n"
-                f"    sla_ms: {meta.sla_ms}"
-            )
-        return "\n".join(lines) if lines else "(no agents registered)"
+    @staticmethod
+    def _recall_op(vector_store, recall: list[dict]) -> dict:
+        """Build the tracer op record for the Milvus semantic-recall step."""
+        if not vector_store.enabled:
+            return {
+                "store": "milvus",
+                "op": "search",
+                "detail": "semantic recall — Milvus disabled",
+                "enabled": False,
+            }
+        return {
+            "store": "milvus",
+            "op": "search",
+            "detail": f"semantic recall — {len(recall)} hit(s)",
+            "code": "long_term_memory.search(embed(prompt), limit=5)",
+            "enabled": True,
+            "hits": [str(h.get("content", ""))[:80] for h in recall],
+        }
 
-    def _build_system_prompt(self, state: AgentState) -> str:
-        menu = self._render_capability_menu()
+    @staticmethod
+    def _facts_op(facts: dict[str, str]) -> dict:
+        """Build the tracer op record for the agent_facts structural-recall step."""
+        return {
+            "store": "mongodb",
+            "op": "read",
+            "detail": f"facts recall — {len(facts)} fact(s)",
+            "code": "agent_facts.find({scope:global} | {scope:session, thread_id})",
+            "enabled": True,
+            "hits": [f"{k}: {v}"[:80] for k, v in facts.items()],
+        }
+
+    # ------------------------------------------------------------------
+    def _build_system_prompt(
+        self, state: AgentState, recall: list[dict] | None = None, facts: dict[str, str] | None = None
+    ) -> str:
+        menu = render_capability_menu(self._registry.list_active())
+        recall_block = ""
+        if recall:
+            lines = "\n".join(f"- {str(h.get('content', '')).strip()}" for h in recall)
+            recall_block = (
+                "\n\nRELEVANT PAST CONTEXT (semantic recall from long-term memory — "
+                "use only if it helps; do not invent facts):\n" + lines
+            )
+        facts_block = ""
+        if facts:
+            lines = "\n".join(f"- {k}: {v}" for k, v in facts.items())
+            facts_block = (
+                "\n\nKNOWN FACTS (structured recall from agent_facts — use only if it "
+                "helps; do not invent facts):\n" + lines
+            )
         replan_block = ""
         snapshot = state.get("blackboard_snapshot")
         reason = state.get("replan_reason")
@@ -81,6 +115,13 @@ class PlannerAgent(BaseAgent):
             "- depends_on=[] means a subtask can run independently. Populate depends_on "
             "ONLY when one task literally needs another task's output as input. "
             "Two unrelated requests run in parallel.\n"
+            "- CHAINING: to feed an earlier subtask's result into a later one, put a "
+            "reference in the later subtask's args AND add <id> to its depends_on. Use "
+            "${<id>.text} for the task's text output, or ${<id>.view.<path>} for a field of "
+            "its structured view (see each agent's 'outputs' for the shape). The reference is "
+            "replaced at run time. For 'the first/Nth one of a list', reference the real field "
+            "(e.g. ${t1.view.items.0.id}) — do NOT guess a literal like outage_id 1. Chain only "
+            "when the later task genuinely needs the earlier task's output.\n"
             "- Only return an empty subtasks list when truly NO registered agent can "
             "address the request. If you can find a reasonable match, return that match.\n\n"
             "Examples:\n"
@@ -95,91 +136,41 @@ class PlannerAgent(BaseAgent):
             '{"id":"t1","agent_id":"weather","args":{"location":"tokyo"},"depends_on":[]},'
             '{"id":"t2","agent_id":"outage","args":{},"depends_on":[]}'
             ']}\n\n'
+            'User: "Top 5 outages, then full details of the first one." (chained — reference the real id)\n'
+            '→ {"subtasks":['
+            '{"id":"t1","agent_id":"outage","args":{},"depends_on":[]},'
+            '{"id":"t2","agent_id":"outage","args":{"outage_id":"${t1.view.items.0.id}"},"depends_on":["t1"]}'
+            ']}\n\n'
+            'User: "Look up outage 18645677, then have the docs assistant explain it." (chained)\n'
+            '→ {"subtasks":['
+            '{"id":"t1","agent_id":"outage","args":{"outage_id":18645677},"depends_on":[]},'
+            '{"id":"t2","agent_id":"rag","args":{"query":"Explain this outage: ${t1.text}"},"depends_on":["t1"]}'
+            ']}\n\n'
             "Output rules:\n"
             "- Use only agent_ids from the list above.\n"
             "- Give each subtask a stable id like 't1','t2'.\n"
             "- City names go in args as lowercase strings.\n"
+            f"{recall_block}"
+            f"{facts_block}"
             f"{replan_block}\n\n"
             f"{_PLAN_SCHEMA_HINT}"
         )
 
     # ------------------------------------------------------------------
-    @staticmethod
-    def _extract_json(raw: str) -> dict | None:
-        """Find the first balanced JSON object in `raw` and parse it.
-
-        Tolerant of LLM tics like trailing junk, an extra closing brace, or a
-        markdown code fence — we walk the string tracking brace depth and string
-        state so we stop exactly at the matching closer of the first object.
-        """
-        if not raw:
-            return None
-        start = raw.find("{")
-        if start == -1:
-            return None
-        depth = 0
-        in_string = False
-        escape = False
-        for i in range(start, len(raw)):
-            ch = raw[i]
-            if in_string:
-                if escape:
-                    escape = False
-                elif ch == "\\":
-                    escape = True
-                elif ch == '"':
-                    in_string = False
-                continue
-            if ch == '"':
-                in_string = True
-            elif ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    candidate = raw[start:i + 1]
-                    try:
-                        return json.loads(candidate)
-                    except json.JSONDecodeError:
-                        return None
-        # Unbalanced — fall back to greedy parse as a last resort.
-        try:
-            return json.loads(raw[start:])
-        except json.JSONDecodeError:
-            return None
-
-    @staticmethod
-    def _normalize_agent_id(raw_id: str | None) -> str | None:
-        """Resolve common LLM stumbles to a real registry key.
-
-        Handles: trailing version (` v1.0.0`), accidental quotes/whitespace,
-        case differences. Returns the canonical agent_id if a match is found,
-        else None.
-        """
-        if not raw_id or not isinstance(raw_id, str):
-            return None
-        cleaned = raw_id.strip().strip('"').strip("'").strip()
-        # Drop trailing " v1.2.3" or "@1.2.3" version suffixes.
-        cleaned = re.sub(r"[\s@]+v?\d+(?:\.\d+){0,3}\s*$", "", cleaned).strip()
-        if cleaned in AGENT_REGISTRY:
-            return cleaned
-        # Case-insensitive fallback.
-        lower_map = {k.lower(): k for k in AGENT_REGISTRY}
-        return lower_map.get(cleaned.lower())
-
     def _build_plan(self, parsed: dict) -> Plan:
         raw_subtasks: list[dict[str, Any]] = parsed.get("subtasks", []) or []
+        metas = {m.agent_id: m for m in self._registry.list_active()}
+        known_ids = set(metas)
         clean: list[Subtask] = []
         for st in raw_subtasks:
             raw_id = st.get("agent_id")
-            agent_id = self._normalize_agent_id(raw_id)
-            entry = AGENT_REGISTRY.get(agent_id) if agent_id else None
-            if entry is None:
+            agent_id = normalize_agent_id(raw_id, known_ids)
+            meta = metas.get(agent_id) if agent_id else None
+            if meta is None:
                 self.log("warning", "planner.unknown_agent_id", raw=str(raw_id), normalized=str(agent_id))
                 continue
             if agent_id != raw_id:
                 self.log_event("planner.agent_id_normalized", raw=str(raw_id), resolved=agent_id)
-            meta, _cls = entry
             args = st.get("args") or {}
             ok, err = meta.validate_args(args)
             if not ok:
@@ -199,19 +190,41 @@ class PlannerAgent(BaseAgent):
 
     # ------------------------------------------------------------------
     def run(self, state: AgentState) -> AgentState:
+        if os.getenv("DEBUG_BREAK"):
+            breakpoint()  # opt-in: only fires when DEBUG_BREAK is set (see .vscode/launch.json)
         updated = self._increment(state)
-        prompt = self._build_system_prompt(state)
         user_msg = state.get("user_input") or ""
+
+        # Real semantic recall from Milvus long-term memory (no-ops when disabled).
+        vector_store = get_vector_store()
+        recall = vector_store.search(state.get("thread_id") or "", user_msg) if user_msg else []
+        db_ops = [self._recall_op(vector_store, recall)]
+        self.log_event("planner.semantic_recall", hits=len(recall), enabled=vector_store.enabled)
+
+        # Structured recall from agent_facts (globals + this thread's session facts).
+        facts = get_facts_store().query(state.get("thread_id") or "")
+        db_ops.append(self._facts_op(facts))
+        self.log_event("planner.facts_recall", facts=len(facts))
+
+        try:
+            prompt = self._build_system_prompt(state, recall, facts)
+        except RegistryUnavailable as e:
+            self.log("error", "planner.registry_unavailable", error=str(e))
+            return self.set_error(updated, "Agent registry is unavailable; cannot build a plan.")
         messages = [SystemMessage(content=prompt), HumanMessage(content=user_msg)]
         raw = self.call_llm(messages)
         updated = patch(updated, agent_scratchpad=raw)
 
-        parsed = self._extract_json(raw)
+        parsed = extract_json(raw)
         if parsed is None:
             self.log("error", "planner.parse_failed", raw=raw[:500])
             return self.set_error(updated, "Planner could not parse a plan from the model.")
 
-        plan = self._build_plan(parsed)
+        try:
+            plan = self._build_plan(parsed)
+        except RegistryUnavailable as e:
+            self.log("error", "planner.registry_unavailable", error=str(e))
+            return self.set_error(updated, "Agent registry is unavailable; cannot validate the plan.")
         if not plan.subtasks:
             self.log_event("planner.empty_plan")
             # Empty plan → Synthesizer will produce a clarification.
@@ -220,6 +233,7 @@ class PlannerAgent(BaseAgent):
                 plan=plan.model_dump(),
                 agent_versions={},
                 blackboard={},
+                db_ops=db_ops,
             )
 
         agent_versions = {t.id: t.agent_version for t in plan.subtasks}
@@ -236,4 +250,5 @@ class PlannerAgent(BaseAgent):
             blackboard={},
             blackboard_snapshot=None,
             replan_reason=None,
+            db_ops=db_ops,
         )

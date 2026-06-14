@@ -1,5 +1,5 @@
 from baseagent.base_agent import BaseAgent
-from registry import AgentMeta, FieldSpec, register
+from registry import AgentMeta, FieldSpec
 from state import AgentState
 
 
@@ -27,8 +27,15 @@ META = AgentMeta(
         "location": FieldSpec(type="string", required=True, description="City name."),
     },
     output_schema={
-        "text": FieldSpec(type="string", description="Plain-language weather report."),
+        "text": FieldSpec(type="string", description="Plain-language weather report.", persist=True),
     },
     sla_ms=4000,
 )
-register(META, WeatherAgent)
+
+
+if __name__ == "__main__":
+    # Run this agent as an independent service that self-registers with the
+    # Registry Service and exposes the A2A endpoint POST /a2a. Set AGENT_PORT (e.g. 8010).
+    from baseagent.agent_server import run_agent
+
+    run_agent(WeatherAgent, META)

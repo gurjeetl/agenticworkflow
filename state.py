@@ -38,15 +38,34 @@ class AgentState(TypedDict):
     intent: Optional[str]
     outage_id: Optional[int]
 
-    # Planner / Orchestrator / Gate
+    # Router decision: "plan" (full pipeline) | "fast" (skip to executor) | "chitchat" (skip to synthesizer)
+    route: Optional[str]
+
+    # Planner / Orchestrator / Executor / Gate
     plan: Optional[dict]
     agent_versions: dict[str, str]
+    waves: Optional[list[list[str]]]   # Orchestrator decomposition: task ids per wave
+    plan_error: Optional[str]          # DAG decomposition failure, surfaced to Executor
     blackboard: dict[str, dict]
     blackboard_snapshot: Optional[dict]
     replan_count: int
     max_replans: int
     replan_reason: Optional[str]
     partial: bool
+
+    # Per-node real database operations, surfaced to the Tracer's Live DB State
+    # panel. Each node overwrites this with the ops it performed this step:
+    # [{store: "redis"|"mongodb"|"milvus", op: "read"|"write"|"search",
+    #   detail, code?, keys?, enabled}]. Nodes with no store I/O leave it unset.
+    db_ops: Optional[list[dict]]
+
+    # LLM Guard (mandatory content guard): set by the input/output guard nodes.
+    # guard_block is truthy only when a blocking scanner fired (short-circuits to
+    # END with a safe refusal); guard_input/guard_output record each scan for the
+    # tracer.
+    guard_block: Optional[dict]
+    guard_input: Optional[dict]
+    guard_output: Optional[dict]
 
     # Output & control
     final_output: Optional[str]

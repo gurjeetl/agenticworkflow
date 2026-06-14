@@ -38,6 +38,19 @@ mlflow.db
 mlartifacts/
 mlruns/
 
+# Local datasets / scratch (not shipped with the project)
+Data.Json
+New Text Document.txt
+
+# Docs / presentation artifacts (kept local, not published)
+docs/
+
+# Runtime output & local store state
+*.out
+*.err
+logs_*.txt
+milvus_store.db/
+
 # Local AI assistant context files (not shipped with the project)
 CLAUDE.md
 AGENTS.md

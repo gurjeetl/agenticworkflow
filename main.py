@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from mlflow.entities import SpanType
 from pydantic import BaseModel
 
@@ -19,10 +19,13 @@ configure_logging()
 init_mlflow()
 
 from graph.graph_builder import build_graph
+from memory.commit_store import get_commit_store
+from memory.facts_store import get_facts_store
 from memory.memory import get_thread_config
 from memory.mongo_store import get_mongo_store
-from memory.postgres_store import get_postgres_store
 from memory.redis_store import get_redis_store
+from memory.vector_store import get_vector_store
+from security import get_llm_guard
 
 _log = get_logger(__name__)
 
@@ -33,17 +36,39 @@ async def lifespan(app: FastAPI):
     await store.ensure_indexes()
     _log.info("mongodb.indexes_ensured")
 
-    pg = get_postgres_store()
-    await pg.ensure_pool()
-    _log.info("postgres.ready", extra={"attrs": {"enabled": pg.enabled}})
+    commits = get_commit_store()
+    commits.ensure_indexes()
+    _log.info("commit_store.ready", extra={"attrs": {"enabled": commits.enabled}})
+
+    # Shares the commit store's pymongo client, so no separate close() below.
+    facts = get_facts_store()
+    facts.ensure_indexes()
+    _log.info("facts_store.ready", extra={"attrs": {"enabled": facts.enabled}})
+
+    vectors = get_vector_store()
+    vectors.ensure_collection()
+    _log.info("milvus.ready", extra={"attrs": {"enabled": vectors.enabled}})
 
     redis = get_redis_store()
     _log.info("redis.ready", extra={"attrs": {"enabled": redis.enabled}})
 
+    # Mandatory content guard: constructing it here loads the local models, so a
+    # missing dependency or un-loadable model aborts startup (fail-closed) rather
+    # than letting the pipeline run unprotected.
+    get_llm_guard()
+    _log.info("llm_guard.ready")
+
+    # Warm the Router's local multi-intent classifier so the first request doesn't
+    # pay the model load. Best-effort: it fails open if the model can't load.
+    from router.intent_classifier import get_intent_classifier
+    get_intent_classifier().warm()
+    _log.info("router_intent_classifier.ready")
+
     yield
 
     store.close()
-    await pg.close()
+    commits.close()
+    vectors.close()
     await redis.close()
 
 
@@ -99,18 +124,25 @@ async def chat(req: ChatRequest):
             "location": prior_values.get("location"),
             "intent": prior_values.get("intent"),
             "outage_id": None,
+            "route": None,
             "plan": None,
             "agent_versions": {},
+            "waves": None,
+            "plan_error": None,
             "blackboard": {},
             "blackboard_snapshot": None,
             "replan_count": 0,
             "max_replans": 3,
             "replan_reason": None,
             "partial": False,
+            "guard_block": None,
+            "guard_input": None,
+            "guard_output": None,
             "final_output": None,
             "view": None,
             "is_complete": False,
             "error": None,
+            "db_ops": None,
         }
         try:
             result = graph.invoke(state, config=config)
@@ -148,28 +180,41 @@ async def chat_trace(req: ChatRequest):
     frontend animates step-by-step so users can see Planner → Orchestrator →
     Gate → Synthesizer execute.
     """
+    import os
+    if os.getenv("DEBUG_BREAK"):
+        breakpoint()  # opt-in: only fires when DEBUG_BREAK is set (see .vscode/launch.json)
     import time
     run_id = uuid.uuid4().hex
-    config = get_thread_config(req.thread_id + ":trace:" + run_id)  # isolated thread to avoid polluting chat history
+    config = get_thread_config(req.thread_id + ":trace:" + run_id)  # isolated graph checkpoint per run
+
+    # Load prior session memory + facts for this thread so consecutive traces on the
+    # same thread_id build on each other — mirrors /chat. The trace UI keeps a stable
+    # thread_id in localStorage, so reloads stay in the same session.
+    store = get_mongo_store()
+    prior_messages = await store.get_messages(req.thread_id)
+    facts = await store.get_facts(req.thread_id)
+    long_term_keys = [f"{k}: {v}" for k, v in facts.items()]
+
     state = {
         "user_input": req.message,
         "current_task": "",
         "thread_id": req.thread_id,
         "run_id": run_id,
-        "messages": [HumanMessage(content=req.message)],
+        "messages": prior_messages + [HumanMessage(content=req.message)],
         "agent_scratchpad": "",
         "iteration_count": 0,
         "max_iterations": 10,
         "tool_calls": [],
         "tool_results": [],
         "short_term_memory": [],
-        "long_term_memory_keys": [],
+        "long_term_memory_keys": long_term_keys,
         "active_agent": "",
         "next_action": "",
         "delegated_task": None,
         "location": None,
         "intent": None,
         "outage_id": None,
+        "route": None,
         "plan": None,
         "agent_versions": {},
         "blackboard": {},
@@ -178,10 +223,14 @@ async def chat_trace(req: ChatRequest):
         "max_replans": 3,
         "replan_reason": None,
         "partial": False,
+        "guard_block": None,
+        "guard_input": None,
+        "guard_output": None,
         "final_output": None,
         "view": None,
         "is_complete": False,
         "error": None,
+        "db_ops": None,
     }
 
     steps: list[dict] = []
@@ -193,14 +242,76 @@ async def chat_trace(req: ChatRequest):
                 if not isinstance(update, dict):
                     continue
                 cumulative.update(update)
+                slim = _slim_update(update)
+                # db_ops lingers in state (every node returns full state via patch),
+                # so it reappears on nodes that didn't produce it. Keep it only on the
+                # nodes that actually touch a store.
+                if node not in _DB_OP_PRODUCERS:
+                    slim.pop("db_ops", None)
                 steps.append({
                     "node": node,
                     "elapsed_ms": int((time.perf_counter() - t0) * 1000),
-                    "update": _slim_update(update),
+                    "update": slim,
                 })
     except Exception as e:
         _log.error("chat_trace.failed", extra={"attrs": {"error": str(e)}}, exc_info=True)
         return {"error": str(e), "steps": steps}
+
+    # Persist this turn's session memory so the next trace on this thread sees it.
+    # Reconstruct the conversation from known inputs + the final answer rather than
+    # cumulative["messages"] — under stream_mode="updates" cumulative only holds the
+    # last node's messages delta (the lone AIMessage), so it would drop the user turn.
+    # Best-effort: the trace must still return even if the write fails.
+    final_answer = cumulative.get("final_output") or cumulative.get("error") or ""
+    turn = [HumanMessage(content=req.message)]
+    if final_answer:
+        turn.append(AIMessage(content=final_answer))
+    try:
+        await store.save_messages(
+            req.thread_id,
+            prior_messages + turn,
+            cumulative.get("short_term_memory", []),
+        )
+    except Exception:
+        _log.warning("chat_trace.save_messages_failed", extra={"attrs": {"thread_id": req.thread_id}})
+
+    # Final response: the run is done, so clear this run's Redis blackboard mirror
+    # (best-effort; the 1h TTL is the fallback). Session memory + the permanent
+    # stores are untouched. Surfaced as a synthetic step so the trace shows cleanup.
+    #
+    # Only the executor writes the blackboard, so a run that never reached it (e.g.
+    # the input guard blocked the prompt) has nothing in Redis under bb:thread:run:*.
+    # Issuing a DEL then would be a no-op AND the card would falsely claim a clear,
+    # so skip the call and report honestly instead.
+    redis = get_redis_store()
+    wrote_blackboard = bool(cumulative.get("blackboard"))
+    if wrote_blackboard:
+        try:
+            await redis.delete_run(req.thread_id, run_id)
+        except Exception:
+            pass
+        final_op = {
+            "store": "redis",
+            "op": "delete",
+            "node": "final",
+            "detail": "blackboard cleared (1h TTL is the fallback)",
+            "code": f"DEL bb:{req.thread_id}:{run_id}:*",
+            "enabled": redis.enabled,
+        }
+    else:
+        final_op = {
+            "store": "redis",
+            "op": "delete",
+            "node": "final",
+            "detail": "no blackboard written this run — nothing to clear (no-op)",
+            "code": f"DEL bb:{req.thread_id}:{run_id}:*  → 0 keys",
+            "enabled": redis.enabled,
+        }
+    steps.append({
+        "node": "final",
+        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+        "update": {"db_ops": [final_op]},
+    })
 
     final_text = cumulative.get("final_output") or cumulative.get("error") or ""
     return {
@@ -208,12 +319,25 @@ async def chat_trace(req: ChatRequest):
         "thread_id": req.thread_id,
         "run_id": run_id,
         "steps": steps,
+        # What this run loaded from session memory BEFORE the graph ran, so the
+        # trace UI can show prior turns carrying forward instead of starting cold.
+        "session_loaded": {
+            # Count prior exchanges (user turns), not raw messages — one
+            # human+assistant turn reads as a single "prior message".
+            "turns": sum(1 for m in prior_messages if isinstance(m, HumanMessage)),
+            "preview": (str(getattr(prior_messages[-1], "content", "")) if prior_messages else "")[:80],
+            "facts": long_term_keys,
+        },
         "final": {
             "response": final_text,
             "view": cumulative.get("view"),
             "partial": bool(cumulative.get("partial")),
         },
     }
+
+
+# Graph nodes that actually perform a store operation (and emit db_ops).
+_DB_OP_PRODUCERS = {"planner", "executor", "synthesizer"}
 
 
 def _slim_update(update: dict) -> dict:
@@ -242,10 +366,34 @@ async def get_state(thread_id: str):
     return snapshot.values
 
 
+@app.get("/blackboard/{thread_id}/{run_id}")
+async def get_blackboard(thread_id: str, run_id: str):
+    """Read back the Redis-mirrored blackboard entries for one run.
+
+    Returns {"enabled": false, "entries": {}} when Redis is disabled (REDIS_URL
+    unset or the redis package missing) — the blackboard mirror is best-effort.
+    """
+    store = get_redis_store()
+    return {"enabled": store.enabled, "entries": await store.get_run(thread_id, run_id)}
+
+
 @app.get("/registry")
 async def registry_dump():
-    """Expose registered agents so the trace UI can show the menu the Planner saw."""
-    from registry import list_active
+    """Expose discovered agents so the trace UI can show live agent discovery.
+
+    Proxies the Registry Service (same data the Planner sees). The shape is
+    backward-compatible with the previous in-process dump and additionally
+    carries liveness fields (endpoint, last_heartbeat) so the UI can mark each
+    agent as live.
+    """
+    import asyncio as _asyncio
+
+    from registry.registry_client import RegistryUnavailable, get_registry_client
+
+    try:
+        metas = await _asyncio.to_thread(get_registry_client().list_active)
+    except RegistryUnavailable as e:
+        return {"agents": [], "error": str(e)}
     return {
         "agents": [
             {
@@ -258,10 +406,34 @@ async def registry_dump():
                 "sla_ms": m.sla_ms,
                 "transport": m.transport,
                 "status": m.status,
+                "endpoint": m.endpoint,
+                "instance_id": m.instance_id,
+                "last_heartbeat": m.last_heartbeat.isoformat() if m.last_heartbeat else None,
             }
-            for m, _cls in list_active()
+            for m in metas
         ]
     }
+
+
+@app.get("/conversations")
+async def list_conversations(limit: int = 50):
+    """List past conversations (durable) for the sidebar, most recent first."""
+    store = get_mongo_store()
+    return {"conversations": await store.list_conversations(limit=limit)}
+
+
+@app.get("/conversations/{thread_id}")
+async def get_conversation(thread_id: str):
+    """Full history of one conversation as {role, content} turns, for resuming."""
+    store = get_mongo_store()
+    return {"thread_id": thread_id, "turns": await store.get_conversation(thread_id)}
+
+
+@app.delete("/conversations/{thread_id}")
+async def delete_conversation(thread_id: str):
+    store = get_mongo_store()
+    await store.delete_conversation(thread_id)
+    return {"deleted": thread_id}
 
 
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")

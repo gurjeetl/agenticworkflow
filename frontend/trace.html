@@ -81,9 +81,12 @@
 
     .agent-menu { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
     .agent-card { background: #fff; border: 1px solid #e6e8eb; border-radius: 7px; padding: 9px 12px; }
-    .agent-card .id { font-weight: 700; font-size: 13px; color: #1a73e8; }
+    .agent-card .id { font-weight: 700; font-size: 13px; color: #1a73e8; display: flex; align-items: center; gap: 6px; }
     .agent-card .desc { font-size: 12px; color: #4a505c; margin-top: 2px; }
     .agent-card .meta { font-size: 11px; color: #8a8f99; margin-top: 4px; }
+    .agent-card .endpoint { font-size: 11px; color: #0F6E56; margin-top: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #16a34a; box-shadow: 0 0 0 3px rgba(22,163,74,.18); display: inline-block; }
+    .live-label { font-size: 10px; font-weight: 700; color: #16a34a; letter-spacing: .04em; }
 
     .final-card { background: linear-gradient(135deg, #1a73e8 0%, #5b97f4 100%); color: #fff; border-radius: 10px; padding: 18px 20px; margin-top: 12px; }
     .final-card h4 { color: rgba(255,255,255,0.85); }
@@ -95,26 +98,105 @@
 
     .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #cfd3da; border-top-color: #1a73e8; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
     @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* --- Live DB State: two-column layout + side panel --- */
+    .trace-cols { display: flex; gap: 18px; align-items: flex-start; }
+    .trace-steps { flex: 1; min-width: 0; }
+    .db-side { width: 296px; flex-shrink: 0; position: sticky; top: 14px; display: flex; flex-direction: column; gap: 11px; }
+    .db-side-title { font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: #5f6772; padding-bottom: 2px; }
+    .db-block { border: 1px solid #e6e8eb; border-radius: 9px; overflow: hidden; background: #fff; }
+    .db-hdr { padding: 7px 11px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .db-hdr.redis { background: #fdece8; color: #b0361d; }
+    .db-hdr.mongodb { background: #e7f6ec; color: #0c6b34; }
+    .db-hdr.milvus { background: #e3f4f1; color: #0c6e60; }
+    .db-hdr.off { background: #f0f2f5; color: #8a8f99; }
+    .ttl-pill { font-size: 9px; font-weight: 700; background: rgba(0,0,0,.08); padding: 1px 6px; border-radius: 10px; letter-spacing: 0; text-transform: none; }
+    .db-body { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+    .kv { display: flex; flex-direction: column; gap: 1px; }
+    .kv-k { font-size: 10px; font-weight: 600; color: #3a414d; font-family: 'Cascadia Code', monospace; word-break: break-all; }
+    .kv-v { font-size: 10.5px; color: #5f6772; padding-left: 7px; border-left: 2px solid #e1e4e9; line-height: 1.45; }
+    .kv-v.read { color: #1558b0; border-left-color: #1a73e8; }
+    .kv-v.write { color: #137333; border-left-color: #137333; font-weight: 600; }
+    .kv-v.vec { color: #0c6e60; border-left-color: #0F6E56; font-weight: 600; }
+    .kv-v.carry { color: #9aa0a6; border-left-color: #e1e4e9; }
+    .kv-v.del { color: #c5221f; border-left-color: #f0a299; text-decoration: line-through; opacity: 0.7; }
+    .db-empty { font-size: 10.5px; color: #8a8f99; font-style: italic; }
+    .db-note { font-size: 10px; color: #8a8f99; line-height: 1.5; }
+    .db-legend { font-size: 10.5px; color: #5f6772; background: #f7f8fa; border: 1px solid #e6e8eb; border-radius: 8px; padding: 8px 10px; line-height: 1.65; }
+    .db-legend b { color: #3a414d; }
+
+    /* per-step "DB operations this step" card */
+    .dbops { display: flex; flex-direction: column; gap: 5px; margin-top: 2px; }
+    .dbop { display: flex; gap: 8px; align-items: flex-start; padding: 7px 10px; border-radius: 7px; font-size: 12px; line-height: 1.45; border: 1px solid #e6e8eb; }
+    .dbop.redis { background: #fdf3f0; border-color: #f0cfc4; }
+    .dbop.mongodb { background: #f1faf4; border-color: #bfe3cb; }
+    .dbop.milvus { background: #eef7f5; border-color: #bfe2dc; }
+    .dbop.none { background: #f7f8fa; color: #8a8f99; }
+    .dbop .badge { font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: 10px; letter-spacing: .03em; text-transform: uppercase; flex-shrink: 0; color: #fff; white-space: nowrap; }
+    .dbop.redis .badge { background: #b0361d; }
+    .dbop.mongodb .badge { background: #137333; }
+    .dbop.milvus .badge { background: #0F6E56; }
+    .dbop code { font-size: 10.5px; background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 3px; font-family: 'Cascadia Code', monospace; word-break: break-all; }
+    .dbop em { font-style: normal; color: #8a8f99; }
+
+    @media (max-width: 980px) { .trace-cols { flex-direction: column; } .db-side { width: 100%; position: static; } }
   </style>
 </head>
 <body>
   <div class="wrap">
     <a href="/" class="top-link">← back to chat</a>
     <h1>Agent Framework · Execution Tracer</h1>
-    <div class="sub">Run a prompt and watch every phase of the new pipeline execute, one step at a time. Planner → Orchestrator → Gate → Synthesizer.</div>
+    <div class="sub">Run a prompt and watch every phase of the new pipeline execute, one step at a time. Router → Planner → Orchestrator → Executor → Gate → Synthesizer.</div>
     <div id="root" style="margin-top: 22px"></div>
   </div>
 
   <script type="text/babel">
     const { useState, useEffect, useMemo } = React;
 
-    const threadId = crypto.randomUUID();
+    // Persist the trace thread_id so consecutive traces (and page reloads) stay in
+    // the same session — the backend loads prior messages + facts for this thread,
+    // so related prompts build on each other. "New conversation" rotates it.
+    function loadThreadId() {
+      let id = localStorage.getItem("traceThreadId");
+      if (!id) { id = crypto.randomUUID(); localStorage.setItem("traceThreadId", id); }
+      return id;
+    }
     const PHASES = {
+      input_guard:  { idx: "🛡", title: "Input guard",  color: "#9333ea", pill: "GUARD-IN", description: "Local LLM Guard scans the raw user prompt BEFORE anything else runs. Blocking scanners (prompt-injection, toxicity, banned topics, code-injection regex) short-circuit the pipeline to a safe refusal; sanitizing scanners (PII, secrets) redact in place so downstream agents never see raw sensitive data." },
+      router:       { idx: 0, title: "Router",       color: "#2A7D70", pill: "ROUTE", description: "Cheap, registry-aware triage before the planner. Fast-paths a single-agent request straight to the executor, sends chitchat to the synthesizer, or falls through to the full planner pipeline when the request is ambiguous or multi-intent." },
       planner:      { idx: 1, title: "Planner",      color: "#534AB7", pill: "PLAN",  description: "Splits the user prompt into a DAG of subtasks. The LLM gets a menu of registered agents and picks which ones to call, with what args, and in what dependency order." },
-      orchestrator: { idx: 2, title: "Orchestrator", color: "#993C1D", pill: "RUN",   description: "Computes dependency waves from the DAG (Kahn's algorithm) and runs each wave concurrently via asyncio.gather. Writes every result to the shared blackboard." },
-      gate:         { idx: 3, title: "Completion gate", color: "#0F6E56", pill: "GATE", description: "Inspects the blackboard: are all subtasks satisfied? Any errors? Is the re-plan budget exhausted? Decides whether to synthesize or re-plan." },
-      synthesizer:  { idx: 4, title: "Synthesizer", color: "#1a73e8", pill: "SYNTH", description: "Reads the blackboard and composes one user-facing answer. Single-task results pass straight through; multi-task results go through an LLM merge. Marks [PARTIAL] for any errored sections." },
+      orchestrator: { idx: 2, title: "Orchestrator", color: "#993C1D", pill: "WAVES", description: "Decomposes the DAG into dependency waves (Kahn's algorithm). Tasks with no unresolved dependencies fan out together; the decomposition is handed to the Executor — no agents run here." },
+      executor:     { idx: 3, title: "Executor",     color: "#B06000", pill: "EXEC",  description: "Runs the waves in sequence; within each wave, its tasks run concurrently via asyncio.gather. A wave starts only after the previous one finishes, so a dependent task always sees its upstream results. Invokes each chosen agent over the A2A protocol (JSON-RPC message/send) at the endpoint discovered from the registry. Resolves any ${tN...} arg references from upstream results first. The agents in turn call their own tools through the MCP gateway. Writes every result — success or error — to the shared blackboard." },
+      gate:         { idx: 4, title: "Completion gate", color: "#0F6E56", pill: "GATE", description: "Inspects the blackboard: are all subtasks satisfied? Any errors? Is the re-plan budget exhausted? Decides whether to synthesize or re-plan." },
+      synthesizer:  { idx: 5, title: "Synthesizer", color: "#1a73e8", pill: "SYNTH", description: "Reads the blackboard and composes one user-facing answer. Single-task results pass straight through; multi-task results go through an LLM merge. Marks [PARTIAL] for any errored sections." },
+      output_guard: { idx: "🛡", title: "Output guard", color: "#9333ea", pill: "GUARD-OUT", description: "Local LLM Guard scans the synthesized answer BEFORE it reaches the user. Blocking scanners (toxicity, banned topics) replace the answer with a safe refusal; the Sensitive scanner redacts any PII that leaked into the response." },
+      final:        { idx: 6, title: "Final response", color: "#1A1612", pill: "DONE", description: "Answer delivered. If the executor wrote a shared blackboard, this run's Redis mirror is cleared here (DEL; the 1h TTL is the fallback for any stragglers) — a run that never reached the executor has nothing to clear. Session Memory (24h) and the permanent stores (agent_commits, Milvus embeddings) are untouched, ready for the next turn." },
     };
+
+    // Friendly, human-readable explanation of what each LLM Guard scanner checks.
+    // Drives the "why allowed / why blocked" copy under the guard steps.
+    const SCANNERS = {
+      PromptInjection: "Prompt-injection & manipulation, flagged by an ML classifier — jailbreaks (“ignore previous instructions”, “forget you are…”), prompt-leak requests, and injected instructions or markup. As a model (not a keyword match) it can fire on injection-looking input such as embedded HTML, even when it isn't a literal jailbreak.",
+      Toxicity:        "Toxic, abusive or harmful language.",
+      BanTopics:       "Disallowed topics — violence, self-harm, hate speech, illegal weapons.",
+      Regex:           "Code/script-injection payloads — XSS, SQLi, shell, template/Log4Shell, path traversal.",
+      Anonymize:       "Personal data (PII) — redacted in place, never blocked.",
+      Sensitive:       "Personal data (PII) in the answer — redacted in place, never blocked.",
+      Secrets:         "API keys / credentials — redacted in place, never blocked.",
+      scan_error:      "A scanner raised an error and the guard is fail-closed, so the request was refused.",
+    };
+    const scannerDesc = (name) => SCANNERS[name] || "Flagged by the safety filter.";
+
+    // Raw model confidence (0–1) each blocking scanner trips at — mirrors the
+    // llm-guard defaults in security/llm_guard.py. The guard reports a *normalized*
+    // risk score in [-1,1] (calculate_risk_score); invert it back to raw confidence
+    // so the "why allowed" readout can show how close each scanner came to blocking.
+    const GUARD_THRESHOLDS = { PromptInjection: 0.92, Toxicity: 0.5, BanTopics: 0.6 };
+    function rawConfidence(name, norm) {
+      const t = GUARD_THRESHOLDS[name];
+      if (t === undefined || norm === undefined || norm === null) return null;
+      return norm > 0 ? t + norm * (1 - t) : t * (1 + norm);
+    }
 
     function highlight(json) {
       return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, m => {
@@ -130,19 +212,184 @@
       return <pre dangerouslySetInnerHTML={{ __html: highlight(pretty) }} />;
     }
 
+    // Render a structured view payload. RAG views get a friendly cited-sources
+    // list; everything else falls back to the raw JSON tree.
+    function ViewPayload({ view }) {
+      if (view && view.type === 'rag') {
+        const sources = view.sources || [];
+        return (
+          <div style={{marginTop:4}}>
+            <div style={{fontSize:12,color:'#5f6772',marginBottom:4}}>Retrieved & cited sources (RAG):</div>
+            <ul style={{margin:0,paddingLeft:18,fontSize:12.5,lineHeight:1.6}}>
+              {sources.map(s => (
+                <li key={s.n}>
+                  <code style={{background:'#eef0f4',padding:'1px 4px',borderRadius:3}}>[{s.n}]</code>{' '}
+                  {s.source} <span style={{color:'#8a8f99'}}>· score {s.score}</span>
+                </li>
+              ))}
+              {sources.length === 0 && <li style={{color:'#8a8f99'}}>(no sources)</li>}
+            </ul>
+          </div>
+        );
+      }
+      return <JsonView data={view} />;
+    }
+
+    // Explains the LLM Guard verdict for the input/output guard steps: whether the
+    // prompt/answer was allowed or blocked, WHICH scanners drove the decision, and
+    // the per-scanner risk scores. `stage` is 'input' or 'output'.
+    function GuardStep({ update, stage }) {
+      const guard = stage === 'input' ? update.guard_input : update.guard_output;
+
+      // Output guard is a no-op when there is no answer to scan (e.g. blocked input).
+      if (!guard || !guard.scanned) {
+        return (
+          <div className="card">
+            <h4>Content guard</h4>
+            <div style={{fontSize:13,color:'#8a8f99'}}>Nothing to scan this step — the guard passed through (no {stage === 'input' ? 'prompt' : 'answer'} text).</div>
+          </div>
+        );
+      }
+
+      const blocked = !!guard.blocked;
+      const findings = guard.findings || [];
+      const scores = guard.scores || {};
+      const target = stage === 'input' ? 'prompt' : 'answer';
+
+      return (
+        <div className={`card ${blocked ? 'error' : 'success'}`}>
+          <h4>Why the {target} was {blocked ? 'blocked' : 'allowed'}</h4>
+          <span style={{display:'inline-block',background:blocked ? '#c5221f' : '#137333',color:'#fff',
+                        fontWeight:700,fontSize:12,letterSpacing:'.4px',padding:'3px 10px',borderRadius:999}}>
+            {blocked ? '⛔ BLOCKED' : '✓ ALLOWED'}
+          </span>
+
+          {blocked ? (
+            <>
+              <div style={{marginTop:8,fontSize:13,color:'#4a505c'}}>
+                A blocking scanner flagged this {target}, so the pipeline was short-circuited
+                straight to a safe refusal — {stage === 'input'
+                  ? 'the router, planner and agents never ran.'
+                  : 'the synthesized answer was replaced before reaching the user.'}
+              </div>
+              <div style={{marginTop:8,fontSize:12.5,fontWeight:700,color:'#5f6772'}}>Flagged by:</div>
+              <ul style={{margin:'4px 0 0 18px',padding:0,fontSize:12.5,lineHeight:1.6}}>
+                {findings.map(f => (
+                  <li key={f}><span style={{fontWeight:600,color:'#c5221f'}}>{f}</span> — {scannerDesc(f)}</li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <>
+              <div style={{marginTop:8,fontSize:13,color:'#4a505c'}}>
+                Every blocking scanner scored below its risk threshold, so the {target} was
+                allowed to continue down the pipeline.
+                {guard.redacted && ' Sensitive data (PII / secrets) was detected and redacted in place before continuing.'}
+              </div>
+              {guard.redacted && (
+                <div style={{marginTop:6,fontSize:12,color:'#8a4f00'}}>🛡 Redaction applied — downstream {stage === 'input' ? 'agents' : 'users'} never see the raw sensitive value.</div>
+              )}
+              {(() => {
+                // Surface a scanner's reading only when it's notably elevated for ITS
+                // own threshold — otherwise benign prompts read ~0.00 and the table is
+                // just noise. PromptInjection blocks at 0.92, so 0.6 flags a real
+                // "suspicious but allowed" near-miss; Toxicity / BanTopics use 0.4.
+                const NOTABLE = { PromptInjection: 0.6, Toxicity: 0.4, BanTopics: 0.4 };
+                const rows = ['PromptInjection', 'Toxicity', 'BanTopics']
+                  .filter(name => scores[name] !== undefined)
+                  .map(name => ({ name, raw: rawConfidence(name, scores[name]) }))
+                  .filter(r => r.raw !== null && r.raw > NOTABLE[r.name]);
+                if (!rows.length) return null;
+                return (
+                  <div style={{marginTop:12}}>
+                    <div style={{fontSize:12.5,fontWeight:700,color:'#5f6772',marginBottom:4}}>
+                      Scanner readings <span style={{fontWeight:400,color:'#8a8f99'}}>(raw confidence 0–1; allowed because each stayed under its block threshold)</span>
+                    </div>
+                    <table className="bb-table">
+                      <thead><tr><th style={{width:150}}>Scanner</th><th style={{width:90}}>Confidence</th><th style={{width:80}}>Blocks at</th><th>Checks for</th></tr></thead>
+                      <tbody>
+                        {rows.map(r => {
+                          const near = r.raw >= GUARD_THRESHOLDS[r.name] - 0.15;
+                          return (
+                            <tr key={r.name}>
+                              <td><span className="bb-key">{r.name}</span>{near ? ' ⚠️' : ''}</td>
+                              <td style={{fontFamily:"'Cascadia Code', monospace", fontWeight:600, color: near ? '#b06000' : '#137333'}}>{r.raw.toFixed(2)}</td>
+                              <td style={{color:'#8a8f99'}}>{GUARD_THRESHOLDS[r.name].toFixed(2)}</td>
+                              <td style={{color:'#5f6772'}}>{scannerDesc(r.name)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </>
+          )}
+
+          {blocked && findings.length > 0 && (
+            <div style={{marginTop:12}}>
+              <div style={{fontSize:12.5,fontWeight:700,color:'#5f6772',marginBottom:4}}>Risk score of the {findings.length === 1 ? 'scanner' : 'scanners'} that blocked this {target} <span style={{fontWeight:400,color:'#8a8f99'}}>(higher = riskier; trips when it crosses its threshold)</span></div>
+              <table className="bb-table">
+                <thead><tr><th style={{width:150}}>Scanner</th><th style={{width:70}}>Score</th><th>Checks for</th></tr></thead>
+                <tbody>
+                  {findings.filter(name => scores[name] !== undefined).map(name => (
+                    <tr key={name} className="bb-row-err">
+                      <td><span className="bb-key" style={{color:'#c5221f'}}>{name}</span>{' ⛔'}</td>
+                      <td style={{fontFamily:"'Cascadia Code', monospace", fontWeight:600, color:'#c5221f'}}>{scores[name]}</td>
+                      <td style={{color:'#5f6772'}}>{scannerDesc(name)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    function RouterStep({ update }) {
+      const route = update.route || 'plan';
+      const INFO = {
+        fast:     { txt: 'FAST-PATH',  color: '#0F6E56', desc: 'Single-agent match — skipping the planner and orchestrator and jumping straight to the executor with a one-task plan.' },
+        chitchat: { txt: 'CHITCHAT',   color: '#8a4f00', desc: 'No agent needed — routing straight to the synthesizer for a direct reply.' },
+        plan:     { txt: 'FULL PLAN',  color: '#534AB7', desc: 'Ambiguous or multi-intent (or low confidence) — falling through to the full planner pipeline.' },
+      };
+      const info = INFO[route] || INFO.plan;
+      const subtasks = (update.plan && update.plan.subtasks) || [];
+      return (
+        <div className={`card ${route === 'plan' ? '' : 'success'}`}>
+          <h4>Router decision</h4>
+          <span style={{display:'inline-block',background:info.color,color:'#fff',fontWeight:700,fontSize:12,letterSpacing:'.4px',padding:'3px 10px',borderRadius:999}}>{info.txt}</span>
+          <div style={{marginTop:8,fontSize:13,color:'#4a505c'}}>{info.desc}</div>
+          {route === 'fast' && subtasks.length > 0 && (
+            <div style={{marginTop:8,fontSize:13}}>
+              {'→ '}<span style={{color:'#1a73e8',fontWeight:600}}>{subtasks[0].agent_id}</span>
+              {'  args: '}<code style={{background:'#eef0f4',padding:'1px 5px',borderRadius:3}}>{JSON.stringify(subtasks[0].args || {})}</code>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     function PlannerStep({ update, agents }) {
       const plan = update.plan || {};
       const subtasks = plan.subtasks || [];
       return (
         <>
           <div className="card">
-            <h4>Agent registry (the menu the LLM saw)</h4>
+            <h4>Agents discovered from registry service (the menu the LLM saw)</h4>
             <div className="agent-menu">
               {(agents || []).map(a => (
                 <div key={a.agent_id} className="agent-card">
-                  <div className="id">{a.agent_id} <span style={{fontWeight:400,fontSize:11,color:'#8a8f99'}}>v{a.version}</span></div>
+                  <div className="id">
+                    <span className="live-dot" title={a.last_heartbeat ? `last heartbeat ${a.last_heartbeat}` : 'live'}></span>
+                    {a.agent_id} <span style={{fontWeight:400,fontSize:11,color:'#8a8f99'}}>v{a.version}</span>
+                    <span className="live-label">LIVE</span>
+                  </div>
                   <div className="desc">{a.description || '(no description)'}</div>
                   <div className="meta">tags: {(a.capability_tags || []).join(', ') || '—'} · sla {a.sla_ms}ms</div>
+                  {a.endpoint && <div className="endpoint">▸ {a.endpoint}/a2a <span style={{color:'#8a8f99'}}>(A2A · JSON-RPC)</span></div>}
                 </div>
               ))}
             </div>
@@ -186,21 +433,71 @@
       return levels;
     }
 
+    // Build waves from the Orchestrator's own decomposition (update.waves =
+    // task ids per wave); fall back to recomputing from the plan client-side.
+    function wavesFrom(update, subtasks) {
+      const byId = {};
+      subtasks.forEach(t => { byId[t.id] = t; });
+      const ids = update && update.waves;
+      if (Array.isArray(ids) && ids.length) {
+        return ids.map(group => group.map(id => byId[id]).filter(Boolean));
+      }
+      return computeWaves(subtasks);
+    }
+
     function OrchestratorStep({ update, plan }) {
-      const blackboard = update.blackboard || {};
       const subtasks = (plan && plan.subtasks) || [];
-      const waves = useMemo(() => computeWaves(subtasks), [subtasks]);
+      const waves = useMemo(() => wavesFrom(update, subtasks), [update, subtasks]);
+      const planError = update.plan_error;
 
       return (
         <>
+          {planError && (
+            <div className="card error">
+              <h4>DAG invalid</h4>
+              <div style={{fontSize:13,color:'#c5221f'}}>{planError}</div>
+            </div>
+          )}
           <div className="card">
             <h4>Wave decomposition</h4>
-            <div style={{fontSize:12.5,color:'#5f6772',marginBottom:8}}>Tasks with no unresolved dependencies fan out together. The next wave starts only when the current wave fully completes.</div>
+            <div style={{fontSize:12.5,color:'#5f6772',marginBottom:8}}>Tasks with no unresolved dependencies fan out together. The Executor runs each wave in turn — the next wave starts only when the current one fully completes.</div>
             <div className="dag">
               {waves.length === 0 && <div style={{fontSize:13,color:'#8a8f99'}}>(no tasks in plan)</div>}
               {waves.map((wave, wi) => (
                 <div key={wi} className="wave">
                   <div className="wave-label">Wave {wi + 1} · {wave.length === 1 ? 'sequential' : 'parallel'} ({wave.length} task{wave.length === 1 ? '' : 's'})</div>
+                  <div className="tasks">
+                    {wave.map(t => (
+                      <div key={t.id} className="task">
+                        <div className="tid">{t.id}</div>
+                        <div className="ag">{t.agent_id}</div>
+                        {t.depends_on && t.depends_on.length > 0 && <div className="deps">deps: {t.depends_on.join(', ')}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      );
+    }
+
+    function ExecutorStep({ update, plan }) {
+      const blackboard = update.blackboard || {};
+      const subtasks = (plan && plan.subtasks) || [];
+      const waves = useMemo(() => wavesFrom(update, subtasks), [update, subtasks]);
+
+      return (
+        <>
+          <div className="card">
+            <h4>Wave execution</h4>
+            <div style={{fontSize:12.5,color:'#5f6772',marginBottom:8}}>Waves run in sequence; each wave's tasks fan out concurrently via asyncio.gather. ✓ = wrote a result, ✕ = errored (captured for the gate).</div>
+            <div className="dag">
+              {waves.length === 0 && <div style={{fontSize:13,color:'#8a8f99'}}>(nothing to execute)</div>}
+              {waves.map((wave, wi) => (
+                <div key={wi} className="wave">
+                  <div className="wave-label">Wave {wi + 1}</div>
                   <div className="tasks">
                     {wave.map(t => {
                       const bb = blackboard[t.id];
@@ -233,7 +530,7 @@
                         ? <span style={{color:'#c5221f'}}>error: {entry.error}</span>
                         : <>
                             {entry.text && <div>{entry.text}</div>}
-                            {entry.view && <details style={{marginTop:4}}><summary style={{cursor:'pointer',color:'#1a73e8',fontSize:12}}>view payload ({entry.view.type})</summary><JsonView data={entry.view} /></details>}
+                            {entry.view && <details style={{marginTop:4}}><summary style={{cursor:'pointer',color:'#1a73e8',fontSize:12}}>view payload ({entry.view.type})</summary><ViewPayload view={entry.view} /></details>}
                           </>}
                     </td>
                   </tr>
@@ -260,8 +557,10 @@
             <div className={`gate-decision ${decision}`}>{decision.toUpperCase()}</div>
             <div style={{marginTop:8,fontSize:13,color:'#4a505c'}}>
               {decision === 'synthesize'
-                ? 'All required tasks present (or budget exhausted). Routing to Synthesizer.'
-                : 'Some tasks missing or errored, and the re-plan budget allows another attempt. Routing back to Planner with the current blackboard snapshot.'}
+                ? (partial
+                    ? 'Some subtasks errored, but the gate has already used up its re-plan retries — rather than loop again it proceeds with a best-effort partial answer. Routing to the Synthesizer.'
+                    : 'Every subtask finished and none errored, so the results are complete and ready to assemble. Routing to the Synthesizer.')
+                : 'At least one subtask is still missing or errored and re-plan retries remain, so the gate sends the current blackboard back to the Planner for another attempt.'}
             </div>
             {replanCount > 0 && <div style={{marginTop:6,fontSize:12,color:'#8a4f00'}}>replan_count → {replanCount}</div>}
             {partial && <div style={{marginTop:6,fontSize:12,color:'#8a4f00'}}>partial flag: true (some agents errored)</div>}
@@ -281,11 +580,203 @@
             {final && final.view && (
               <details style={{marginTop:10,background:'rgba(255,255,255,0.13)',padding:8,borderRadius:6}}>
                 <summary style={{cursor:'pointer',fontSize:12.5,fontWeight:600}}>structured view payload ({final.view.type})</summary>
-                <div style={{marginTop:6}}><JsonView data={final.view} /></div>
+                <div style={{marginTop:6}}><ViewPayload view={final.view} /></div>
               </details>
             )}
           </div>
         </>
+      );
+    }
+
+    const STORE_LABEL = { redis: 'Redis', mongodb: 'MongoDB', milvus: 'Milvus' };
+    const OP_WORD = { read: 'READ', write: 'WRITE', search: 'SEARCH', delete: 'DELETE' };
+    // Only these nodes actually touch a store. Because every node returns the full
+    // state via patch(), db_ops set by a producer lingers in state and reappears on
+    // the next node's streamed update — so we attribute ops only to their producer.
+    // 'final' is the synthetic cleanup step (clears the blackboard).
+    const DB_PRODUCERS = new Set(['planner', 'executor', 'synthesizer', 'final']);
+
+    // Per-step card: the REAL database operations this phase performed, streamed
+    // from the backend on step.update.db_ops. Pure-compute phases have none.
+    function DbOps({ ops, node }) {
+      // Non-producer steps (router/orchestrator/gate) never touch a store; ignore
+      // any db_ops that leaked forward from a previous node's state.
+      if (!DB_PRODUCERS.has(node) || !ops || ops.length === 0) {
+        return (
+          <div className="card">
+            <h4>Database operations this step</h4>
+            <div className="dbops"><div className="dbop none">🗄 No database access this step — pure compute.</div></div>
+          </div>
+        );
+      }
+      return (
+        <div className="card">
+          <h4>Database operations this step</h4>
+          <div className="dbops">
+            {ops.map((op, i) => (
+              <div key={i} className={`dbop ${op.store}`}>
+                <span className="badge">{STORE_LABEL[op.store] || op.store} · {OP_WORD[op.op] || op.op}</span>
+                <div style={{minWidth:0}}>
+                  <div>{op.detail}{op.enabled === false && <em> · disabled (no-op)</em>}</div>
+                  {op.code && <div style={{marginTop:3}}><code>{op.code}</code></div>}
+                  {op.hits && op.hits.length > 0 && (
+                    <ul style={{margin:'4px 0 0 16px',padding:0,fontSize:11,color:'#5f6772',lineHeight:1.5}}>
+                      {op.hits.map((h, j) => <li key={j}>{h}</li>)}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+
+    // Build a per-step snapshot of all three memory tiers — like the teaching
+    // diagram. The Blackboard accumulates the real shared-state the pipeline
+    // produces (plan → waves → agent results → gate), each highlighted at the
+    // step that wrote it; the Synthesizer READS the agent results (blue). Earlier
+    // entries carry forward greyed. snaps[i] is the state as of step i.
+    function buildSnapshots(steps, final, sessionLoaded) {
+      const clip = (t, n) => (t ? String(t).slice(0, n || 52) : '');
+      const bb = [];    // blackboard:  {k, v, addedStep, readStep?, tid?}
+      const sess = [];  // session mem: {k, v, addedStep}
+      const perm = [];  // permanent:   {k, v, addedStep, kind, hits?}
+      let redisEnabled = null, milvusEnabled = null;
+      const snaps = [];
+
+      // Prior session memory loaded BEFORE the graph ran (addedStep -1 → always
+      // 'carry'/grey): shows related earlier turns feeding this run.
+      if (sessionLoaded && sessionLoaded.turns > 0) {
+        const n = sessionLoaded.turns;
+        sess.push({
+          k: 'session:history',
+          v: `${n} prior message${n === 1 ? '' : 's'}` + (sessionLoaded.preview ? ` · …${clip(sessionLoaded.preview, 48)}` : ''),
+          addedStep: -1,
+        });
+      }
+      (sessionLoaded && sessionLoaded.facts || []).forEach(f => {
+        perm.push({ k: 'agent_facts', v: '↺ ' + clip(f, 60), addedStep: -1, kind: 'read' });
+      });
+
+      steps.forEach((s, i) => {
+        const u = s.update || {};
+        const ops = u.db_ops || [];
+
+        // --- Blackboard: only the executor's task results are truly written to Redis
+        // (bb:{thread}:{run}:{task_id}). The plan DAG, waves, and gate decision live in
+        // LangGraph in-memory state — not Redis — so they're shown in the step timeline,
+        // not here.
+        if (s.node === 'executor' && u.blackboard) {
+          ops.filter(o => o.store === 'redis').forEach(o => { if (o.enabled != null) redisEnabled = o.enabled; });
+          Object.entries(u.blackboard).forEach(([tid, e]) => {
+            const k = `bb:${tid}:${(e && e.agent_id) || '?'}`;
+            const v = (e && e.error) ? `error: ${e.error}` : `${(e && e.agent_id) || '—'} · ${clip(e && e.text)}`;
+            if (!bb.some(x => x.k === k)) bb.push({ k, v, addedStep: i, tid });
+          });
+        }
+
+        // --- Planner reads → Permanent tier: Milvus semantic recall + agent_facts lookup ---
+        if (s.node === 'planner') {
+          ops.filter(o => o.store === 'milvus' && o.op === 'search').forEach(o => {
+            if (o.enabled != null) milvusEnabled = o.enabled;
+            perm.push({ k: 'long_term_memory', v: '🔍 ' + o.detail, addedStep: i, kind: 'vec', hits: o.hits || [] });
+          });
+          ops.filter(o => o.store === 'mongodb' && o.op === 'read').forEach(o => {
+            perm.push({ k: 'agent_facts', v: '🔍 ' + o.detail, addedStep: i, kind: 'read', hits: o.hits || [] });
+          });
+        }
+
+        // --- Synthesizer: reads blackboard results, writes session + permanent ---
+        if (s.node === 'synthesizer') {
+          bb.forEach(e => { if (e.tid && e.readStep == null) e.readStep = i; });
+          const ans = (final && final.response) || u.final_output || '';
+          if (ans && !sess.some(e => e.k === 'session:answer')) {
+            sess.push({ k: 'session:answer', v: clip(ans, 64), addedStep: i });
+          }
+          // agent_commits (audit log): mongodb writes whose detail isn't about facts.
+          const commitOps = ops.filter(o => o.store === 'mongodb' && o.op === 'write' && o.detail.indexOf('fact') < 0);
+          if (commitOps.length) {
+            const tids = commitOps.map(o => o.detail).filter(d => d.indexOf('commit ') === 0).map(d => d.replace('commit ', ''));
+            perm.push({ k: 'agent_commits', v: tids.length ? `${tids.join(', ')} committed` : commitOps[0].detail, addedStep: i, kind: 'write' });
+          }
+          // agent_facts: the LLM fact-extraction write (detail always mentions "fact").
+          ops.filter(o => o.store === 'mongodb' && o.op === 'write' && o.detail.indexOf('fact') >= 0).forEach(o => {
+            perm.push({ k: 'agent_facts', v: '✚ ' + o.detail, addedStep: i, kind: 'write', hits: o.hits || [] });
+          });
+          ops.filter(o => o.store === 'milvus' && o.op === 'write').forEach(o => {
+            if (o.enabled != null) milvusEnabled = o.enabled;
+            perm.push({ k: 'long_term_memory', v: '✚ ' + o.detail, addedStep: i, kind: 'vec' });
+          });
+        }
+
+        const isFinal = s.node === 'final';
+        const clsOf = e => e.readStep === i ? 'read'
+          : (e.addedStep === i ? (e.kind === 'vec' ? 'vec' : e.kind === 'read' ? 'read' : 'write') : 'carry');
+        snaps[i] = {
+          redisEnabled, milvusEnabled,
+          // At the final step the whole blackboard is cleared (struck through);
+          // session + permanent stores are untouched (carried).
+          bb: bb.map(e => ({ k: e.k, v: e.v, cls: isFinal ? 'del' : clsOf(e) })),
+          sess: sess.map(e => ({ k: e.k, v: e.v, cls: (!isFinal && e.addedStep === i) ? 'write' : 'carry' })),
+          perm: perm.map(e => ({ k: e.k, v: e.v, cls: isFinal ? 'carry' : clsOf(e), hits: (!isFinal && e.addedStep === i) ? (e.hits || []) : [] })),
+        };
+      });
+      return snaps;
+    }
+
+    // Sticky right panel — shows the snapshot for the current (last revealed) step,
+    // so stepping through reveals state accumulating with this-step changes lit up.
+    function DbState({ steps, revealed, final, sessionLoaded }) {
+      const snaps = useMemo(() => buildSnapshots(steps, final, sessionLoaded), [steps, final, sessionLoaded]);
+      const idx = Math.min(revealed, steps.length) - 1;
+      const snap = idx >= 0 ? snaps[idx] : { bb: [], sess: [], perm: [], redisEnabled: null, milvusEnabled: null };
+      const isFinalStep = idx >= 0 && steps[idx] && steps[idx].node === 'final';
+      const redisOff = snap.redisEnabled === false;
+      const milvusOff = snap.milvusEnabled === false;
+
+      const rows = (arr, emptyText) => arr.length === 0
+        ? <span className="db-empty">{emptyText}</span>
+        : arr.map((e, i) => (
+            <div className="kv" key={i}>
+              <span className="kv-k">{e.k}</span>
+              <span className={`kv-v ${e.cls}`}>{e.v}</span>
+              {(e.hits || []).map((h, j) => <span className="db-note" key={j} style={{paddingLeft:9}}>• {h}</span>)}
+            </div>
+          ));
+
+      const block = (cls, title, ttl, off, content) => (
+        <div className="db-block">
+          <div className={`db-hdr ${cls}${off ? ' off' : ''}`}>
+            <span>{title}</span><span className="ttl-pill">{off ? 'disabled' : ttl}</span>
+          </div>
+          <div className="db-body">{content}</div>
+        </div>
+      );
+
+      return (
+        <div className="db-side">
+          <div className="db-side-title">⛁ Live Database State</div>
+          {block('redis', '⚡ Blackboard · Redis', 'TTL 1h', redisOff,
+            <>
+              {rows(snap.bb, redisOff ? 'Redis mirror off (REDIS_URL unset) — shared state in-memory only.' : 'Empty — fills as the pipeline writes shared state.')}
+              {isFinalStep && snap.bb.length > 0 && <div className="db-note">✕ cleared by Final response — DEL bb:…:* (1h TTL fallback)</div>}
+            </>)}
+          {block('mongodb', '☁ Session Memory · MongoDB', 'TTL 24h', false,
+            <>
+              {rows(snap.sess, 'No session write yet — Synthesizer saves the answer.')}
+              <div className="db-note">session = short_term_memory (conversation, 24h)</div>
+            </>)}
+          {block('milvus', '📚 Permanent · MongoDB + Milvus', 'permanent', milvusOff,
+            <>
+              {rows(snap.perm, milvusOff ? 'Milvus disabled (MILVUS_URI unset).' : 'Empty — fills on recall / commit / embed.')}
+              <div className="db-note">agent_commits + agent_facts (Mongo) · long_term_memory (Milvus)</div>
+            </>)}
+          <div className="db-legend">
+            <b>Green</b> written · <b>Blue</b> read · <b>Teal</b> Milvus vector · <b>Grey</b> carried forward.<br/>
+            Blackboard keys scoped <code style={{fontSize:9}}>bb:thread:run:*</code> — no cross-tenant reach.
+          </div>
+        </div>
       );
     }
 
@@ -304,10 +795,15 @@
               <span className="ms">+{step.elapsed_ms} ms</span>
             </h3>
             <div className="what">{info.description}</div>
+            {phase === 'input_guard' && <GuardStep update={step.update} stage="input" />}
+            {phase === 'output_guard' && <GuardStep update={step.update} stage="output" />}
+            {phase === 'router' && <RouterStep update={step.update} />}
             {phase === 'planner' && <PlannerStep update={step.update} agents={agents} />}
             {phase === 'orchestrator' && <OrchestratorStep update={step.update} plan={plan} />}
+            {phase === 'executor' && <ExecutorStep update={step.update} plan={plan} />}
             {phase === 'gate' && <GateStep update={step.update} />}
             {phase === 'synthesizer' && <SynthesizerStep update={step.update} final={final} />}
+            <DbOps ops={step.update.db_ops} node={phase} />
           </div>
         </div>
       );
@@ -316,7 +812,8 @@
     const SAMPLES = [
       "What's the weather in Paris?",
       "Show me the top outages.",
-      "Tell me about outage 17299126.",
+      "Tell me about outage 18553223.",
+      "What is the A2A protocol in this framework?",
       "Weather in Tokyo and the top outages please.",
     ];
 
@@ -328,9 +825,14 @@
       const [revealed, setRevealed] = useState(0);
       const [autoPlay, setAutoPlay] = useState(false);
       const [error, setError] = useState(null);
+      const [threadId, setThreadId] = useState(loadThreadId);
 
       useEffect(() => {
-        fetch('/registry').then(r => r.json()).then(j => setAgents(j.agents || []));
+        // Poll discovery so live/up-down changes (TTL liveness) show without a reload.
+        const load = () => fetch('/registry').then(r => r.json()).then(j => setAgents(j.agents || [])).catch(() => {});
+        load();
+        const id = setInterval(load, 5000);
+        return () => clearInterval(id);
       }, []);
 
       useEffect(() => {
@@ -364,6 +866,35 @@
         }
       };
 
+      // Start a fresh conversation: rotate the thread_id (so the next trace has no
+      // prior session memory or session-scoped facts) and clear the current view.
+      const newConversation = () => {
+        const id = crypto.randomUUID();
+        localStorage.setItem("traceThreadId", id);
+        setThreadId(id);
+        setTrace(null);
+        setInput("");
+        setRevealed(0);
+        setAutoPlay(false);
+        setError(null);
+      };
+
+      // Force-expire session memory for the CURRENT thread (deletes short_term +
+      // durable conversation) — simulates the 24h TTL lapsing without rotating the
+      // thread_id, so the next trace on this same thread loads no prior messages.
+      // Facts (agent_facts) are untouched.
+      const expireSession = async () => {
+        setLoading(true);
+        try {
+          await fetch(`/conversations/${encodeURIComponent(threadId)}`, { method: 'DELETE' });
+        } catch (e) { /* best-effort — demo control */ }
+        setTrace(null);
+        setRevealed(0);
+        setAutoPlay(false);
+        setError(null);
+        setLoading(false);
+      };
+
       // Derive plan once it's been revealed (Orchestrator/Gate/Synth need it for visualization)
       const planFromTrace = useMemo(() => {
         if (!trace) return null;
@@ -385,16 +916,27 @@
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && run()}
-                placeholder="Ask anything — e.g. weather in Paris and outage 17299126"
+                placeholder="Ask anything — e.g. weather in Paris and outage 18553223"
                 disabled={loading}
                 autoFocus
               />
               <button onClick={() => run()} disabled={loading || !input.trim()}>
                 {loading ? <><span className="spinner" />running…</> : 'Trace'}
               </button>
+              <button onClick={newConversation} disabled={loading}
+                style={{background:'#fff', color:'#3c4043', border:'1px solid #cfd3da'}}
+                title="Start a fresh conversation — new thread, no prior session memory or facts">
+                + New conversation
+              </button>
+              <button onClick={expireSession} disabled={loading}
+                style={{background:'#fff', color:'#b3261e', border:'1px solid #e0a8a3'}}
+                title="Force-expire this thread's session memory now (same thread_id; next trace starts with no prior messages)">
+                Expire session
+              </button>
             </div>
             <div style={{fontSize:12.5,color:'#8a8f99'}}>
-              {agents.length} agent{agents.length === 1 ? '' : 's'} registered: {agents.map(a => a.agent_id).join(', ')}
+              <span className="live-dot" style={{marginRight:6,verticalAlign:'middle'}}></span>
+              {agents.length} agent{agents.length === 1 ? '' : 's'} discovered from registry service: {agents.map(a => a.agent_id).join(', ') || '— none live —'}
             </div>
           </div>
 
@@ -415,31 +957,34 @@
                 · run_id: <code style={{background:'#eef0f4',padding:'2px 7px',borderRadius:4,fontSize:11.5}}>{trace.run_id}</code>
               </div>
 
-              <div>
-                {trace.steps.slice(0, revealed).map((s, i) => (
-                  <StepRow
-                    key={i}
-                    phase={s.node}
-                    step={s}
-                    idx={i}
-                    active={i + 1 <= revealed}
-                    isLast={i === trace.steps.length - 1}
-                    plan={planFromTrace}
-                    agents={agents}
-                    final={trace.final}
-                  />
-                ))}
-                {revealed >= trace.steps.length && trace.final && (
-                  <div style={{marginTop:16,fontSize:12.5,color:'#5f6772',textAlign:'center'}}>
-                    Total runtime: {trace.steps[trace.steps.length-1]?.elapsed_ms ?? 0} ms · {trace.steps.length} nodes executed
-                  </div>
-                )}
+              <div className="trace-cols">
+                <div className="trace-steps">
+                  {trace.steps.slice(0, revealed).map((s, i) => (
+                    <StepRow
+                      key={i}
+                      phase={s.node}
+                      step={s}
+                      idx={i}
+                      active={i + 1 <= revealed}
+                      isLast={i === trace.steps.length - 1}
+                      plan={planFromTrace}
+                      agents={agents}
+                      final={trace.final}
+                    />
+                  ))}
+                  {revealed >= trace.steps.length && trace.final && (
+                    <div style={{marginTop:16,fontSize:12.5,color:'#5f6772',textAlign:'center'}}>
+                      Total runtime: {trace.steps[trace.steps.length-1]?.elapsed_ms ?? 0} ms · {trace.steps.length} nodes executed
+                    </div>
+                  )}
+                </div>
+                <DbState steps={trace.steps} revealed={revealed} final={trace.final} sessionLoaded={trace.session_loaded} />
               </div>
             </div>
           )}
 
           <div className="legend">
-            <strong>How to read this:</strong> each prompt runs the full graph (<code>planner → orchestrator → gate → synthesizer</code>). If the gate routes back to <code>replan</code>, the planner and orchestrator will appear twice in the trace. Coloured pills mark phase boundaries; the green/red borders on result cards show success vs error.
+            <strong>How to read this:</strong> each prompt starts at the <code>router</code>, which either fast-paths to the <code>executor</code>, sends chitchat to the <code>synthesizer</code>, or runs the full graph (<code>planner → orchestrator → executor → gate → synthesizer</code>). If the gate routes back to <code>replan</code>, the planner and orchestrator will appear twice in the trace. Coloured pills mark phase boundaries; the green/red borders on result cards show success vs error.
           </div>
         </>
       );

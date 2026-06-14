@@ -9,12 +9,16 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from mcp_server.rag_index import get_index
+
 WEATHER_DATA: dict[str, str] = {
     "london": "Cloudy, 14°C, light rain expected",
     "paris": "Sunny, 22°C, clear skies",
     "new york": "Partly cloudy, 18°C, mild winds",
     "tokyo": "Humid, 28°C, chance of thunderstorm",
     "dubai": "Hot and sunny, 41°C, no cloud cover",
+    "minneapolis": "warm and humid, 28-30°C, small chance of showers or thunderstorms",
+    "bloomington": "warm and mostly cloudy, 28-30°C, scattered thunderstorms or showers possible",
 }
 
 OUTAGE_DATA_PATH = Path(__file__).resolve().parent.parent / "Data.Json"
@@ -155,6 +159,20 @@ def get_linked_outages() -> list[dict[str, Any]]:
     """Return the list of linked-outage detections from the report."""
     data = _load_outage_data()
     return data.get("linked_outages_detected", [])
+
+
+@mcp.tool()
+def search_docs(query: str, k: int = 4) -> dict[str, Any]:
+    """Retrieve the top-k most relevant documentation chunks for a query.
+
+    Backs the RAG agent: searches this framework's own markdown docs
+    (README, WORKFLOW, docs/*) with BM25 ranking and returns the matching
+    chunks with their source path and relevance score. Use to answer
+    'what is', 'how does', 'explain', 'why' questions about the system
+    (A2A, router, registry, planner, blackboard, synthesizer, ...).
+    """
+    chunks = get_index().search(query or "", k=max(1, min(int(k or 4), 10)))
+    return {"query": query, "returned": len(chunks), "chunks": chunks}
 
 
 if __name__ == "__main__":

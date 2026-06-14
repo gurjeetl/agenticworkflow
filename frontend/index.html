@@ -11,8 +11,23 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; height: 100vh; display: flex; align-items: center; justify-content: center; }
-    #root { width: 100%; max-width: 680px; height: 100vh; display: flex; flex-direction: column; }
-    .chat-container { display: flex; flex-direction: column; height: 100vh; background: #fff; box-shadow: 0 2px 20px rgba(0,0,0,0.1); }
+    #root { width: 100%; max-width: 960px; height: 100vh; display: flex; flex-direction: row; }
+    .sidebar { width: 252px; flex-shrink: 0; background: #fff; border-right: 1px solid #e3e6ea; display: flex; flex-direction: column; height: 100vh; }
+    .sidebar-head { padding: 14px 14px 10px; border-bottom: 1px solid #eceff2; }
+    .new-conv-btn { width: 100%; padding: 10px 12px; background: #1a73e8; color: #fff; border: none; border-radius: 8px; font-size: 13.5px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; justify-content: center; transition: background 0.2s; }
+    .new-conv-btn:hover { background: #1557b0; }
+    .conv-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 3px; }
+    .conv-list-title { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #9aa0a6; padding: 8px 8px 4px; }
+    .conv-item { padding: 9px 10px; border-radius: 8px; cursor: pointer; border: 1px solid transparent; position: relative; }
+    .conv-item:hover { background: #f1f3f4; }
+    .conv-item.active { background: #e8f0fe; border-color: #d2e3fc; }
+    .conv-item .ct { font-size: 13px; color: #202124; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 18px; }
+    .conv-item .cm { font-size: 11px; color: #9aa0a6; margin-top: 2px; }
+    .conv-del { position: absolute; top: 8px; right: 7px; border: none; background: none; color: #bdc1c6; font-size: 14px; cursor: pointer; line-height: 1; padding: 1px 4px; border-radius: 4px; display: none; }
+    .conv-item:hover .conv-del { display: block; }
+    .conv-del:hover { background: #fce8e6; color: #c5221f; }
+    .conv-empty { font-size: 12px; color: #9aa0a6; padding: 10px; font-style: italic; }
+    .chat-container { flex: 1; min-width: 0; display: flex; flex-direction: column; height: 100vh; background: #fff; box-shadow: 0 2px 20px rgba(0,0,0,0.1); }
     .chat-header { background: #1a73e8; color: white; padding: 16px 20px; font-size: 18px; font-weight: 600; }
     .chat-header span { font-size: 13px; font-weight: 400; opacity: 0.85; display: block; margin-top: 2px; }
     .messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
@@ -71,8 +86,18 @@
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
 
-    const threadId = crypto.randomUUID();
-    console.log("threadId:", threadId);
+    const GREETING = { role: "assistant", content: "Hi! I can help with **weather** for London, Paris, New York, Tokyo, or Dubai, or with the **top grid outages** from the latest report. What would you like?" };
+    const LS_KEY = "grid_assistant_thread";
+
+    function fmtWhen(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      const diff = (Date.now() - d.getTime()) / 1000;
+      if (diff < 60) return "just now";
+      if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+      if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+      return d.toLocaleDateString();
+    }
 
     function highlight(json) {
       return json
@@ -208,7 +233,7 @@
       return null;
     }
 
-    function StateModal({ data, onClose }) {
+    function StateModal({ data, threadId, onClose }) {
       const pretty = JSON.stringify(data, null, 2);
       return (
         <div className="modal-backdrop" onClick={onClose}>
@@ -226,9 +251,9 @@
     }
 
     function App() {
-      const [messages, setMessages] = useState([
-        { role: "assistant", content: "Hi! I can help with **weather** for London, Paris, New York, Tokyo, or Dubai, or with the **top grid outages** from the latest report. What would you like?" }
-      ]);
+      const [threadId, setThreadId] = useState(() => localStorage.getItem(LS_KEY) || crypto.randomUUID());
+      const [messages, setMessages] = useState([GREETING]);
+      const [conversations, setConversations] = useState([]);
       const [input, setInput] = useState("");
       const [loading, setLoading] = useState(false);
       const [stateData, setStateData] = useState(null);
@@ -237,6 +262,59 @@
       useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
       }, [messages, loading]);
+
+      const refreshConversations = async () => {
+        try {
+          const res = await fetch("/conversations");
+          const data = await res.json();
+          setConversations(data.conversations || []);
+        } catch { /* ignore */ }
+      };
+
+      // On mount: remember this thread, load the list, and resume the last
+      // conversation if it still has durable history.
+      useEffect(() => {
+        localStorage.setItem(LS_KEY, threadId);
+        refreshConversations();
+        (async () => {
+          try {
+            const res = await fetch(`/conversations/${threadId}`);
+            const data = await res.json();
+            if (data.turns && data.turns.length) setMessages(data.turns);
+          } catch { /* fresh thread */ }
+        })();
+      }, []);
+
+      const newConversation = () => {
+        const id = crypto.randomUUID();
+        setThreadId(id);
+        localStorage.setItem(LS_KEY, id);
+        setMessages([GREETING]);
+        setInput("");
+      };
+
+      const resumeConversation = async (id) => {
+        if (id === threadId || loading) return;
+        setThreadId(id);
+        localStorage.setItem(LS_KEY, id);
+        setLoading(true);
+        try {
+          const res = await fetch(`/conversations/${id}`);
+          const data = await res.json();
+          setMessages(data.turns && data.turns.length ? data.turns : [GREETING]);
+        } catch {
+          setMessages([GREETING]);
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const deleteConversation = async (id, e) => {
+        e.stopPropagation();
+        try { await fetch(`/conversations/${id}`, { method: "DELETE" }); } catch { /* ignore */ }
+        if (id === threadId) newConversation();
+        refreshConversations();
+      };
 
       const showState = async () => {
         try {
@@ -262,6 +340,7 @@
           });
           const data = await res.json();
           setMessages(prev => [...prev, { role: "assistant", content: data.response, view: data.view }]);
+          refreshConversations();
         } catch {
           setMessages(prev => [...prev, { role: "assistant", content: "Sorry, I couldn't reach the server. Please try again." }]);
         } finally {
@@ -270,8 +349,30 @@
       };
 
       return (
+        <>
+        <div className="sidebar">
+          <div className="sidebar-head">
+            <button className="new-conv-btn" onClick={newConversation}>＋ New conversation</button>
+          </div>
+          <div className="conv-list">
+            <div className="conv-list-title">Past conversations</div>
+            {conversations.length === 0 && <div className="conv-empty">No past conversations yet.</div>}
+            {conversations.map(c => (
+              <div
+                key={c.thread_id}
+                className={`conv-item${c.thread_id === threadId ? " active" : ""}`}
+                onClick={() => resumeConversation(c.thread_id)}
+              >
+                <button className="conv-del" title="Delete" onClick={e => deleteConversation(c.thread_id, e)}>&#x2715;</button>
+                <div className="ct">{c.title}</div>
+                <div className="cm">{fmtWhen(c.updated_at)} · {c.message_count} msg</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
         <div className="chat-container">
-          {stateData && <StateModal data={stateData} onClose={() => setStateData(null)} />}
+          {stateData && <StateModal data={stateData} threadId={threadId} onClose={() => setStateData(null)} />}
           <div className="chat-header">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
               <div>
@@ -325,6 +426,7 @@
             <button onClick={send} disabled={loading}>&#9658;</button>
           </div>
         </div>
+        </>
       );
     }
 

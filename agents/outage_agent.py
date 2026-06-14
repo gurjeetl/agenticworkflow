@@ -1,7 +1,7 @@
 import json
 
 from baseagent.base_agent import BaseAgent
-from registry import AgentMeta, FieldSpec, register
+from registry import AgentMeta, FieldSpec
 from state import AgentState
 
 
@@ -83,9 +83,24 @@ META = AgentMeta(
         ),
     },
     output_schema={
-        "text": FieldSpec(type="string", description="Short headline for the result."),
-        "view": FieldSpec(type="object", description="Structured outage_list or outage_detail dict."),
+        "text": FieldSpec(type="string", description="Short headline for the result.", persist=True),
+        "view": FieldSpec(
+            type="object",
+            persist=True,
+            description=(
+                "outage_list = {total, items:[{id, short_description, outage_type, participant, status, is_significant}]}; "
+                "outage_detail = {outage_id, metadata, analysis}. "
+                "To chain, reference a field by path, e.g. ${<id>.view.items.0.id} = first listed outage's id."
+            ),
+        ),
     },
     sla_ms=6000,
 )
-register(META, OutageAgent)
+
+
+if __name__ == "__main__":
+    # Run this agent as an independent service that self-registers with the
+    # Registry Service and exposes the A2A endpoint POST /a2a. Set AGENT_PORT (e.g. 8011).
+    from baseagent.agent_server import run_agent
+
+    run_agent(OutageAgent, META)

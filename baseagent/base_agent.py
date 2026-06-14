@@ -151,6 +151,23 @@ class BaseAgent(Observable):
         self.tools = await self.mcp_client.load_tools(config, self.tool_names)
         self.llm_client.bind_tools(self.tools)
 
+    # ------------------------------------------------------------------
+    # Agent-to-agent (A2A) — discover a peer via the Registry, message it
+    # ------------------------------------------------------------------
+    def call_peer(self, agent_id: str, args: dict, context: dict | None = None, *, sla_ms: int = 10000) -> str:
+        """Delegate to a peer agent over A2A, discovered through the Registry.
+
+        Returns the peer's text reply. Lets an agent fan work out to another
+        agent mid-run (the "agents talk to each other" half of A2A Hybrid)
+        without the two ever importing each other — discovery stays centralized
+        in the Registry, transport is JSON-RPC ``message/send``.
+        """
+        from a2a.client import A2AClient
+        from a2a.types import get_text
+
+        reply = self._run_async(A2AClient().send(agent_id, args, context or {}, sla_ms=sla_ms))
+        return get_text(reply)
+
     def call_mcp_tool(self, name: str, args: dict) -> str:
         tool = next((t for t in self.tools if t.name == name), None)
         if tool is None:
@@ -163,9 +180,6 @@ class BaseAgent(Observable):
             span.set_attribute("mcp.tool", name)
         self.log_event(Events.MCP_TOOL_CALL, tool=name, args=str(args), result=report[:200])
         return report
-
-    async def save_fact(self, state: AgentState, key: str, value: str) -> None:
-        await self.memory.save_fact(state, key, value)
 
     def answer_with(
         self,
