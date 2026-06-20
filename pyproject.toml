@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "genie-platform"
+version = "0.1.0"
+description = "A multi-agent platform: router -> synthesizer workflow plus capabilities (MCP, registry/discovery, A2A, memory, security guards, observability). Applications build agents by inheriting genie.agents.base.BaseAgent."
+requires-python = ">=3.11"
+dependencies = [
+    # --- Web / orchestration ---
+    "fastapi",
+    "uvicorn[standard]",
+    "langchain",
+    "langgraph",
+    "langchain-mcp-adapters",
+    "langchain-openai",
+    "langchain-core",
+    "python-dotenv",
+    # --- Config (central pydantic-settings + YAML sources) ---
+    "pydantic-settings",
+    "PyYAML",
+    # --- Persistence ---
+    "motor",
+    # --- Remote agents (registry/discovery service + agent services) ---
+    "httpx",
+    # --- Optional stores (activate via env/config; no-op when unset) ---
+    "redis>=4.2",
+    "pymilvus[milvus_lite]>=2.4",
+    # --- Security (mandatory input/output content guard) ---
+    "llm-guard>=0.3.15",
+    # --- Router intent classifier (local, CPU) ---
+    "sentence-transformers>=2.7",
+    # --- Observability ---
+    "mlflow>=2.16",
+    "psycopg2-binary",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "import-linter",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/genie", "src/applications"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+
+[tool.importlinter]
+root_packages = ["genie", "applications"]
+
+[[tool.importlinter.contracts]]
+name = "Platform kernel must not depend on applications"
+type = "forbidden"
+source_modules = ["genie"]
+forbidden_modules = ["applications"]

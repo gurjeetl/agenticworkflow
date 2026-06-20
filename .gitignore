@@ -51,8 +51,12 @@ docs/
 logs_*.txt
 milvus_store.db/
 
-# Local AI assistant context files (not shipped with the project)
-CLAUDE.md
+# Locally-built guard model artifacts + env snapshot (large; rebuild via
+# scripts/quantize_guard_models.py — not shipped)
+models/guard_onnx/
+.guard_env_snapshot.txt
+
+# Local assistant context files (not shipped with the project)
 AGENTS.md
 codex.md
 .cursorrules

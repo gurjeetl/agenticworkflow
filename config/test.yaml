@@ -1,0 +1,6 @@
+# Genie platform — test configuration.
+# Point GENIE_CONFIG_FILE at this file in test runs to get deterministic settings.
+openai_model: gpt-4o-mini
+openai_temperature: 0.0
+mcp_services: {}
+llm_services: {}

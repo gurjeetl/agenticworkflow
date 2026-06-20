@@ -7,6 +7,18 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script>
+    // Force the classic JSX runtime (React.createElement against the global React
+    // loaded above). Recent @babel/standalone defaults preset-react to the
+    // *automatic* runtime, which injects `import {jsx} from "react/jsx-runtime"`
+    // into the output — the browser then rejects the generated <script> with
+    // "Cannot use import statement outside a module". A pragma can't override the
+    // standalone default cleanly (importSource clashes with runtime:classic), so
+    // we register an explicit classic preset and select it via data-presets below.
+    Babel.registerPreset('react-classic', {
+      presets: [[Babel.availablePresets['react'], { runtime: 'classic' }]],
+    });
+  </script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -83,7 +95,7 @@
 </head>
 <body>
   <div id="root"></div>
-  <script type="text/babel">
+  <script type="text/babel" data-presets="react-classic">
     const { useState, useRef, useEffect } = React;
 
     const GREETING = { role: "assistant", content: "Hi! I can help with **weather** for London, Paris, New York, Tokyo, or Dubai, or with the **top grid outages** from the latest report. What would you like?" };

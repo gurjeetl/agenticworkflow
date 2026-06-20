@@ -1,0 +1,28 @@
+# Genie platform — default configuration.
+#
+# Precedence: process env vars override these flat values; nested blocks
+# (mcp_services, llm_services) are only expressible here in YAML.
+# Anything left unset falls back to the defaults in genie.platform.config.Settings.
+#
+# Most deployments configure flat values through .env (see .env.example). This
+# file is the home for the *nested* MCP / LLM service catalogs that env vars
+# cannot represent.
+
+# --- LLM selection (flat values; env vars OPENAI_* take priority) ---
+openai_model: gpt-4o-mini
+
+# --- Named MCP servers the platform can connect application agents to ---
+# Application agents inherit BaseAgent and receive MCP connectivity from the
+# platform. A single server may still be configured via MCP_SERVER_URL in .env;
+# define additional named servers here.
+mcp_services: {}
+#   travel:
+#     url: http://127.0.0.1:8001/sse
+#     transport: sse
+#     timeout: 30.0
+
+# --- Named LLM backends (optional; for OpenAI-compatible self-hosted models) ---
+llm_services: {}
+#   local_oss:
+#     model: openai/gpt-oss-120b
+#     base_url: http://localhost:8033/v1

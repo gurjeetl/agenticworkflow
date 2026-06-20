@@ -7,6 +7,18 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script>
+    // Force the classic JSX runtime (React.createElement against the global React
+    // loaded above). Recent @babel/standalone defaults preset-react to the
+    // *automatic* runtime, which injects `import {jsx} from "react/jsx-runtime"`
+    // into the output — the browser then rejects the generated <script> with
+    // "Cannot use import statement outside a module". A pragma can't override the
+    // standalone default cleanly (importSource clashes with runtime:classic), so
+    // we register an explicit classic preset and select it via data-presets below.
+    Babel.registerPreset('react-classic', {
+      presets: [[Babel.availablePresets['react'], { runtime: 'classic' }]],
+    });
+  </script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f6f7f9; color: #1f2330; min-height: 100vh; padding: 24px; }
@@ -150,7 +162,7 @@
     <div id="root" style="margin-top: 22px"></div>
   </div>
 
-  <script type="text/babel">
+  <script type="text/babel" data-presets="react-classic">
     const { useState, useEffect, useMemo } = React;
 
     // Persist the trace thread_id so consecutive traces (and page reloads) stay in
@@ -167,7 +179,7 @@
       planner:      { idx: 1, title: "Planner",      color: "#534AB7", pill: "PLAN",  description: "Splits the user prompt into a DAG of subtasks. The LLM gets a menu of registered agents and picks which ones to call, with what args, and in what dependency order." },
       orchestrator: { idx: 2, title: "Orchestrator", color: "#993C1D", pill: "WAVES", description: "Decomposes the DAG into dependency waves (Kahn's algorithm). Tasks with no unresolved dependencies fan out together; the decomposition is handed to the Executor — no agents run here." },
       executor:     { idx: 3, title: "Executor",     color: "#B06000", pill: "EXEC",  description: "Runs the waves in sequence; within each wave, its tasks run concurrently via asyncio.gather. A wave starts only after the previous one finishes, so a dependent task always sees its upstream results. Invokes each chosen agent over the A2A protocol (JSON-RPC message/send) at the endpoint discovered from the registry. Resolves any ${tN...} arg references from upstream results first. The agents in turn call their own tools through the MCP gateway. Writes every result — success or error — to the shared blackboard." },
-      gate:         { idx: 4, title: "Completion gate", color: "#0F6E56", pill: "GATE", description: "Inspects the blackboard: are all subtasks satisfied? Any errors? Is the re-plan budget exhausted? Decides whether to synthesize or re-plan." },
+      gate:         { idx: 4, title: "Completion gate", color: "#0F6E56", pill: "GATE", description: "Inspects the blackboard: are all subtasks satisfied? Any errors? Decides whether to synthesize or re-plan." },
       synthesizer:  { idx: 5, title: "Synthesizer", color: "#1a73e8", pill: "SYNTH", description: "Reads the blackboard and composes one user-facing answer. Single-task results pass straight through; multi-task results go through an LLM merge. Marks [PARTIAL] for any errored sections." },
       output_guard: { idx: "🛡", title: "Output guard", color: "#9333ea", pill: "GUARD-OUT", description: "Local LLM Guard scans the synthesized answer BEFORE it reaches the user. Blocking scanners (toxicity, banned topics) replace the answer with a safe refusal; the Sensitive scanner redacts any PII that leaked into the response." },
       final:        { idx: 6, title: "Final response", color: "#1A1612", pill: "DONE", description: "Answer delivered. If the executor wrote a shared blackboard, this run's Redis mirror is cleared here (DEL; the 1h TTL is the fallback for any stragglers) — a run that never reached the executor has nothing to clear. Session Memory (24h) and the permanent stores (agent_commits, Milvus embeddings) are untouched, ready for the next turn." },
@@ -866,29 +878,21 @@
         }
       };
 
-      // Start a fresh conversation: rotate the thread_id (so the next trace has no
-      // prior session memory or session-scoped facts) and clear the current view.
-      const newConversation = () => {
+      // Start a fresh conversation: delete the CURRENT thread's stored conversation
+      // (short_term + durable messages, so no orphaned data is left behind), then
+      // rotate to a brand-new thread_id. The next trace begins with no prior session
+      // memory and no session-scoped facts. Global facts and the permanent stores are
+      // untouched. Best-effort delete — rotation proceeds even if cleanup fails.
+      const newConversation = async () => {
+        setLoading(true);
+        try {
+          await fetch(`/conversations/${encodeURIComponent(threadId)}`, { method: 'DELETE' });
+        } catch (e) { /* best-effort — demo control */ }
         const id = crypto.randomUUID();
         localStorage.setItem("traceThreadId", id);
         setThreadId(id);
         setTrace(null);
         setInput("");
-        setRevealed(0);
-        setAutoPlay(false);
-        setError(null);
-      };
-
-      // Force-expire session memory for the CURRENT thread (deletes short_term +
-      // durable conversation) — simulates the 24h TTL lapsing without rotating the
-      // thread_id, so the next trace on this same thread loads no prior messages.
-      // Facts (agent_facts) are untouched.
-      const expireSession = async () => {
-        setLoading(true);
-        try {
-          await fetch(`/conversations/${encodeURIComponent(threadId)}`, { method: 'DELETE' });
-        } catch (e) { /* best-effort — demo control */ }
-        setTrace(null);
         setRevealed(0);
         setAutoPlay(false);
         setError(null);
@@ -925,13 +929,8 @@
               </button>
               <button onClick={newConversation} disabled={loading}
                 style={{background:'#fff', color:'#3c4043', border:'1px solid #cfd3da'}}
-                title="Start a fresh conversation — new thread, no prior session memory or facts">
+                title="Start a fresh conversation — wipes this thread's stored messages and starts a new thread (no prior session memory or session facts)">
                 + New conversation
-              </button>
-              <button onClick={expireSession} disabled={loading}
-                style={{background:'#fff', color:'#b3261e', border:'1px solid #e0a8a3'}}
-                title="Force-expire this thread's session memory now (same thread_id; next trace starts with no prior messages)">
-                Expire session
               </button>
             </div>
             <div style={{fontSize:12.5,color:'#8a8f99'}}>
