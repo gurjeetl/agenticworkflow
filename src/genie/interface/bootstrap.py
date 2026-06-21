@@ -25,10 +25,12 @@ _FRONTEND_DIR = _PROJECT_ROOT / "frontend"
 
 
 def _make_lifespan(settings: Settings):
+    """Build the FastAPI lifespan: bootstrap stores + guards on startup, close on exit."""
     _log = get_logger(__name__)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        """Init/index stores and warm the mandatory guard + intent models, then teardown."""
         # Optional cap on PyTorch intra-op threads for the local models (LLM Guard +
         # router intent classifier). Each model otherwise grabs all cores, so when two
         # requests overlap their inferences oversubscribe the CPU and BOTH slow down.

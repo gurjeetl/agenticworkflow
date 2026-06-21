@@ -1,3 +1,9 @@
+"""Executor node: runs the Orchestrator's waves by invoking agents over A2A.
+
+Executes each dependency wave concurrently, resolving ``${task.path}`` arg
+references against upstream results, and writes every task's outcome (success or
+error) to the shared blackboard for the Completion Gate to inspect.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -43,6 +49,11 @@ class Executor(Observable):
         self._a2a = A2AClient(registry=self._registry)
 
     def run(self, state: AgentState) -> AgentState:
+        """Execute the waves sequentially (tasks within a wave concurrently).
+
+        Seeds the blackboard from a prior attempt's snapshot so already-successful
+        tasks aren't re-run on a re-plan loop, then mirrors the result onto state.
+        """
         plan = Plan(**(state.get("plan") or {}))
         by_id = plan.by_id()
         bb = Blackboard(thread_id=state.get("thread_id", ""), run_id=state.get("run_id", ""))
@@ -98,6 +109,7 @@ class Executor(Observable):
 
     # ------------------------------------------------------------------
     async def _run_wave(self, tasks: list[Subtask], wave_idx: int, bb: Blackboard) -> None:
+        """Run one wave's tasks concurrently over a shared HTTP client."""
         self.log_event("executor.wave_start", wave=wave_idx, count=len(tasks))
         async with httpx.AsyncClient() as http:
             await asyncio.gather(
@@ -169,6 +181,7 @@ class Executor(Observable):
     async def _run_task(
         self, task: Subtask, wave_idx: int, bb: Blackboard, http: httpx.AsyncClient
     ) -> None:
+        """Dispatch one subtask via A2A (one retry), writing its result or error to the blackboard."""
         try:
             meta = self._resolve_meta(task.agent_id)
         except RegistryUnavailable as e:

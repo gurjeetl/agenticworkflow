@@ -1,13 +1,26 @@
+"""Weather demo agent: reports current conditions for a named city.
+
+Thin wrapper over the single ``get_weather`` MCP tool. ``run(state)`` is the
+entry point the graph executor calls; the ``__main__`` block runs it standalone
+as a self-registering A2A service.
+"""
 from genie.agents.base import BaseAgent
 from genie.registry import AgentMeta, FieldSpec, Skill
 from genie.application.state import AgentState
 
 
 class WeatherAgent(BaseAgent):
+    """Reports current weather for a city via the ``get_weather`` MCP tool.
+
+    A minimal single-tool agent: it takes the ``location`` from state, calls the
+    MCP tool, and formats the raw report into a friendly one-line answer.
+    """
+
     system_prompt = "You are a helpful weather reporter for a travel assistant."
     tool_names: list[str] = ["get_weather"]
 
     def run(self, state: AgentState) -> AgentState:
+        """Look up the weather for ``state['location']`` and answer in plain language."""
         city = (state.get("location") or "").lower().strip()
         return self.answer_with_tool(
             state,

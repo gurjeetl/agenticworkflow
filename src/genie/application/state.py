@@ -1,9 +1,22 @@
+"""The shared graph state threaded through every pipeline node.
+
+Defines ``AgentState``, the TypedDict each node's ``run`` reads and returns.
+LangGraph merges per-node patches into it as the run flows through the graph.
+"""
 from typing import TypedDict, Optional, Annotated
 from langchain_core.messages import BaseMessage
 import operator
 
 
 class AgentState(TypedDict):
+    """Mutable state passed between nodes for a single run.
+
+    Grouped by concern: input/conversation, loop control, memory, the Router
+    decision, the Planner/Orchestrator/Executor/Gate working set (plan, waves,
+    blackboard, replan bookkeeping), per-node tracer ``db_ops`` / guard records,
+    and the final output. Most fields are Optional because they are populated by
+    the specific node that owns them; ``messages`` is reduced via ``operator.add``.
+    """
     # Input
     user_input: str
     current_task: str

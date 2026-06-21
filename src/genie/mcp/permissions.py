@@ -1,3 +1,4 @@
+"""Role-based access control hook for MCP tools (permissive by default)."""
 from langchain_core.tools import BaseTool
 
 

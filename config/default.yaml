@@ -1,28 +1,95 @@
-# Genie platform — default configuration.
+# Genie platform — canonical configuration (committed).
 #
-# Precedence: process env vars override these flat values; nested blocks
-# (mcp_services, llm_services) are only expressible here in YAML.
-# Anything left unset falls back to the defaults in genie.platform.config.Settings.
+# This is the primary place to configure the platform. Values here are
+# authoritative: they override environment variables of the same name. Secrets
+# (API keys, tokens, DB passwords) must NOT go here — put them in the gitignored
+# config/local.yaml (see config/local.yaml.example). config/local.yaml is layered
+# on top of this file, so it can override any value below.
 #
-# Most deployments configure flat values through .env (see .env.example). This
-# file is the home for the *nested* MCP / LLM service catalogs that env vars
-# cannot represent.
+# Field reference: genie.platform.config.Settings.
 
-# --- LLM selection (flat values; env vars OPENAI_* take priority) ---
+# ── LLM (OpenAI-compatible) ───────────────────────────────────────────────────
 openai_model: gpt-4o-mini
+# Deterministic routing/planning/synthesis → less run-to-run variance, fewer
+# spurious re-plans. Quoted so it stays a string ("" / unset = provider default).
+openai_temperature: "0"
+# Per-component model overrides (leave unset to fall back to openai_model):
+# planner_model: gpt-4.1-nano
+# synthesizer_model: gpt-4.1-nano
+# router_model: gpt-4o-mini
 
-# --- Named MCP servers the platform can connect application agents to ---
-# Application agents inherit BaseAgent and receive MCP connectivity from the
-# platform. A single server may still be configured via MCP_SERVER_URL in .env;
-# define additional named servers here.
+# ── Pipeline toggles ──────────────────────────────────────────────────────────
+# Set router_enabled: false to drop the Router triage node and send every prompt
+# straight to the Planner (no fast-path / chitchat shortcut).
+router_enabled: false
+
+# ── MCP (the platform's tool-connection capability) ───────────────────────────
+# Single MCP server agents connect to. For multiple named servers, use the
+# mcp_services block below instead.
+mcp_server_url: http://127.0.0.1:8001/sse
+mcp_server_name: weather
+mcp_transport: sse
+mcp_timeout: 30.0
+
+# Named MCP servers (alternative/addition to the single mcp_server_url above).
 mcp_services: {}
 #   travel:
 #     url: http://127.0.0.1:8001/sse
 #     transport: sse
-#     timeout: 30.0
 
-# --- Named LLM backends (optional; for OpenAI-compatible self-hosted models) ---
+# Named LLM backends (for OpenAI-compatible self-hosted models).
 llm_services: {}
-#   local_oss:
-#     model: openai/gpt-oss-120b
-#     base_url: http://localhost:8033/v1
+
+# ── Persistence ───────────────────────────────────────────────────────────────
+mongodb_uri: mongodb://localhost:27017
+mongodb_db: agent_memory
+# Redis hot blackboard mirror (optional; remove to disable).
+redis_url: redis://localhost:6379/0
+# Milvus semantic long-term memory (optional). Local Milvus Lite file — no server
+# needed. For a remote server set milvus_uri to an http URL instead (do NOT put a
+# file path in milvus_uri; pymilvus reserves that for http endpoints).
+milvus_db_path: ./milvus_store.db
+# milvus_uri: http://localhost:19530
+milvus_collection: long_term_memory
+openai_embed_model: text-embedding-3-small
+openai_embed_dim: 1536
+
+# ── Registry / discovery ──────────────────────────────────────────────────────
+registry_url: http://127.0.0.1:8002
+registry_port: 8002
+registry_ttl_seconds: 90
+registry_heartbeat_seconds: 30
+registry_cache_ttl_s: 5.0
+registry_timeout_s: 3.0
+registry_serve_stale: true
+
+# ── Agent service harness ─────────────────────────────────────────────────────
+agent_host: 127.0.0.1
+# agent_port is normally set per-agent via the AGENT_PORT env var at launch
+# (run-all.ps1 / scripts), so it is intentionally NOT pinned here.
+# agent_advertise_host: 127.0.0.1
+# agent_advertise_port: 8010
+
+# ── Security guard (llm-guard) ────────────────────────────────────────────────
+# No personal data in this app → PII/secret NER scanners off (faster, less RAM).
+llm_guard_pii: false
+llm_guard_parallel: true
+llm_guard_use_onnx: false
+llm_guard_onnx_quantized: false
+llm_guard_fail_open: false
+# llm_guard_ban_topics: "violence, self-harm, hate speech, illegal weapons"
+
+# ── Router triage tuning ──────────────────────────────────────────────────────
+router_min_confidence: 0.7
+router_intent_classifier: true
+router_intent_model: sentence-transformers/all-MiniLM-L6-v2
+router_intent_threshold: 0.30
+router_intent_min_agents: 2
+
+# ── Planner ───────────────────────────────────────────────────────────────────
+planner_max_facts: 40
+
+# ── Observability ─────────────────────────────────────────────────────────────
+mlflow_tracking_uri: http://127.0.0.1:5000
+mlflow_experiment_name: base-agent-framework
+# torch_num_threads: 4

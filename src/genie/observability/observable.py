@@ -1,3 +1,11 @@
+"""MLflow tracing mixin shared by every traced platform component.
+
+:class:`Observable` is the base class agents, tools, gates, guards, memory layers,
+and handlers inherit to get automatic MLflow spans (declared via
+``_traced_methods``) plus span-correlated logging/metrics. The module-private
+helpers capture a compact, size-bounded view of a node's input/output state so
+spans stay readable and never leak huge payloads.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -16,6 +24,7 @@ _STATE_KEYS = ("user_input", "thread_id", "intent", "location", "iteration_count
 
 
 def _safe_repr(value: Any, max_len: int = _MAX_VALUE_LEN) -> str:
+    """repr ``value`` for a span attribute, truncated and never raising."""
     try:
         s = value if isinstance(value, str) else repr(value)
     except Exception:
@@ -24,6 +33,7 @@ def _safe_repr(value: Any, max_len: int = _MAX_VALUE_LEN) -> str:
 
 
 def _stringify_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
+    """Coerce attrs to MLflow-safe scalars (str/int/float/bool), dropping None."""
     out: dict[str, Any] = {}
     for k, v in attrs.items():
         if v is None:
@@ -36,6 +46,7 @@ def _stringify_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
 
 
 def _capture_inputs(args: tuple, kwargs: dict) -> dict[str, Any]:
+    """Span inputs for a call: a curated slice of the state dict, else args/kwargs."""
     if len(args) == 1 and isinstance(args[0], dict):
         state = args[0]
         captured = {k: state[k] for k in _STATE_KEYS if k in state and state[k] not in (None, "")}
@@ -50,6 +61,7 @@ def _capture_inputs(args: tuple, kwargs: dict) -> dict[str, Any]:
 
 
 def _capture_outputs(result: Any) -> dict[str, Any]:
+    """Span outputs: the curated state slice if result is a state dict, else its repr."""
     if isinstance(result, dict):
         captured = {k: result[k] for k in _STATE_KEYS if k in result and result[k] not in (None, "")}
         if captured:
@@ -59,6 +71,12 @@ def _capture_outputs(result: Any) -> dict[str, Any]:
 
 
 def _wrap_with_mlflow_span(method: Callable, owner_cls: type) -> Callable:
+    """Wrap ``method`` so each call opens an MLflow span recording inputs/outputs/errors.
+
+    The span name and type are resolved from the *runtime* class so a subclass can
+    override ``_component_kind``/``_span_type``. Idempotent: an already-wrapped
+    method is returned unchanged.
+    """
     if getattr(method, "_mlflow_traced", False):
         return method
     fallback_kind = getattr(owner_cls, "_component_kind", "component")
@@ -113,6 +131,7 @@ class Observable:
     _span_type: str = SpanType.CHAIN
 
     def __init_subclass__(cls, **kwargs):
+        """Auto-wrap each method named in ``_traced_methods`` with an MLflow span."""
         super().__init_subclass__(**kwargs)
         for name in cls._traced_methods:
             method = cls.__dict__.get(name) or getattr(cls, name, None)
@@ -123,6 +142,7 @@ class Observable:
     # --- Instance API ---
 
     def log_event(self, name: str, **attrs: Any) -> None:
+        """Add a named event to the current active span (no-op if there is none)."""
         span = mlflow.get_current_active_span()
         if span is None:
             return
@@ -132,12 +152,14 @@ class Observable:
             pass
 
     def log_metric(self, name: str, value: float, step: int | None = None) -> None:
+        """Log an MLflow metric (best-effort; swallows MLflow errors)."""
         try:
             mlflow.log_metric(name, value, step=step)
         except Exception:
             pass
 
     def log_param(self, name: str, value: Any) -> None:
+        """Log an MLflow param (best-effort; swallows MLflow errors)."""
         try:
             mlflow.log_param(name, value)
         except Exception:
@@ -145,10 +167,12 @@ class Observable:
 
     @contextmanager
     def span(self, name: str, span_type: str = SpanType.CHAIN):
+        """Open a nested MLflow span for an ad-hoc block of work."""
         with mlflow.start_span(name=name, span_type=span_type) as s:
             yield s
 
     def log(self, level: str, event: str, **attrs: Any) -> None:
+        """Emit a structured log record AND mirror it onto the active span as an event."""
         logger = logging.getLogger(self.__class__.__module__)
         log_fn = getattr(logger, level.lower(), logger.info)
         exc_info = attrs.pop("exc_info", False)

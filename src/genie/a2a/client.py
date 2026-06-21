@@ -10,13 +10,13 @@ intact so an async (e.g. Kafka) transport can be selected here later.
 """
 from __future__ import annotations
 
-import os
 import uuid
 from typing import Any
 
 import httpx
 
 from genie.a2a.agent_card import a2a_url
+from genie.platform.config import get_settings
 from genie.a2a.types import (
     METHOD_MESSAGE_SEND,
     JsonRpcRequest,
@@ -36,6 +36,8 @@ class A2AError(RuntimeError):
 
 
 class A2AClient:
+    """Resolve an agent via the Registry and send it an A2A ``message/send``."""
+
     def __init__(self, registry: RegistryClient | None = None) -> None:
         self._registry = registry or get_registry_client()
 
@@ -54,12 +56,14 @@ class A2AClient:
 
     @staticmethod
     def _headers() -> dict:
-        token = os.getenv("AGENT_INVOKE_TOKEN")
+        """Bearer auth header when AGENT_INVOKE_TOKEN is set, else no auth."""
+        token = get_settings().agent_invoke_token
         return {"Authorization": f"Bearer {token}"} if token else {}
 
     def _build_request(
         self, agent_id: str, args: dict | None, context: dict, sla_ms: int
     ) -> JsonRpcRequest:
+        """Wrap args + invocation context into a JSON-RPC ``message/send`` request."""
         ctx = dict(context or {})
         message = Message(
             role="user",
@@ -85,6 +89,7 @@ class A2AClient:
 
     @staticmethod
     def _parse_response(data: Any) -> Message:
+        """Unwrap a JSON-RPC response to its Message result, raising on any error."""
         rpc = JsonRpcResponse.model_validate(data)
         if rpc.error is not None:
             raise A2AError(rpc.error.message, code=rpc.error.code)

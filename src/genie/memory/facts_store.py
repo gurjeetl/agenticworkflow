@@ -1,7 +1,10 @@
+"""Sync (pymongo) MongoDB store for per-thread structured facts (the
+``agent_facts`` collection): global facts recalled every session and session
+facts with a sliding TTL. Read/written by the Planner and Synthesizer nodes."""
+
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -9,6 +12,7 @@ from pymongo import ASCENDING
 from pymongo.errors import PyMongoError
 
 from genie.memory.commit_store import get_commit_store
+from genie.platform.config import get_settings
 
 _log = logging.getLogger(__name__)
 
@@ -38,14 +42,17 @@ class FactsStore:
     def __init__(self) -> None:
         # Reuse the commit store's pymongo client (one pool for the sync side).
         client = get_commit_store()._client
-        db_name = os.getenv("MONGODB_DB", "agent_memory")
+        db_name = get_settings().mongodb_db
         self._facts = client[db_name]["agent_facts"]
 
     @property
     def enabled(self) -> bool:
+        """Always True — MongoDB is the required primary datastore."""
         return True
 
     def ensure_indexes(self) -> None:
+        """Create the scope/thread lookup indexes and the session-only TTL index.
+        Best-effort: failures are logged and swallowed."""
         try:
             self._facts.create_index([("thread_id", ASCENDING)])
             self._facts.create_index([("scope", ASCENDING)])
@@ -71,6 +78,9 @@ class FactsStore:
         thread_id: str | None = None,
         run_id: str = "",
     ) -> None:
+        """Insert or update one fact. Global facts are keyed by ``key`` and clear any
+        stale TTL; session facts are keyed by ``thread_id``+``key`` and (re)set the
+        sliding ``expireAt``. Best-effort: failures are logged and swallowed."""
         now = datetime.now(timezone.utc)
         try:
             if scope == "global":
@@ -139,6 +149,7 @@ _store: FactsStore | None = None
 
 
 def get_facts_store() -> FactsStore:
+    """Return the process-wide FactsStore singleton, creating it on first use."""
     global _store
     if _store is None:
         _store = FactsStore()

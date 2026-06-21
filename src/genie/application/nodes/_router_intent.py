@@ -18,8 +18,7 @@ Agent embeddings are cached and only recomputed when the active agent set change
 """
 from __future__ import annotations
 
-import os
-
+from genie.platform.config import get_settings
 from genie.observability import get_logger
 
 _log = get_logger(__name__)
@@ -35,16 +34,17 @@ class IntentClassifier:
     """Counts distinct agents a prompt activates, to flag multi-intent prompts."""
 
     def __init__(self) -> None:
-        self._model_name = os.getenv("ROUTER_INTENT_MODEL", _DEFAULT_MODEL)
-        self._threshold = float(os.getenv("ROUTER_INTENT_THRESHOLD", str(_DEFAULT_THRESHOLD)))
-        self._min_agents = int(os.getenv("ROUTER_INTENT_MIN_AGENTS", str(_DEFAULT_MIN_AGENTS)))
-        self._enabled = os.getenv("ROUTER_INTENT_CLASSIFIER", "1") == "1"
+        self._model_name = get_settings().router_intent_model
+        self._threshold = get_settings().router_intent_threshold
+        self._min_agents = get_settings().router_intent_min_agents
+        self._enabled = get_settings().router_intent_classifier
         self._model = None
         self._agent_vecs: dict[str, object] = {}  # agent_id -> normalized embedding
         self._agent_sig: tuple | None = None  # signature of the cached agent set
 
     @property
     def enabled(self) -> bool:
+        """True when the local intent classifier is active (model loadable)."""
         return self._enabled
 
     # ------------------------------------------------------------------
@@ -55,6 +55,7 @@ class IntentClassifier:
         return f"{getattr(meta, 'description', '') or ''} {tags}".strip()
 
     def _ensure_model(self):
+        """Lazily load and cache the sentence-transformers model on first use."""
         if self._model is None:
             from sentence_transformers import SentenceTransformer
 
@@ -116,6 +117,7 @@ _classifier: IntentClassifier | None = None
 
 
 def get_intent_classifier() -> IntentClassifier:
+    """Return the process-wide classifier, constructing it once (shares the agent-vec cache)."""
     global _classifier
     if _classifier is None:
         _classifier = IntentClassifier()

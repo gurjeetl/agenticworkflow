@@ -1,13 +1,19 @@
+"""Synthesizer node: composes the single user-facing answer from the blackboard.
+
+The convergence point of every route. Has LLM-free fast paths (empty plan,
+single structured view) and otherwise merges blackboard entries into prose, then
+fires best-effort background write-backs (commits, embedding, fact extraction).
+"""
 from __future__ import annotations
 
 import json
-import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from genie.agents.base import BaseAgent, make_chat_model, patch
+from genie.platform.config import get_settings
 from genie.llm.client import LLMClient
 from genie.memory.commit_store import get_commit_store
 from genie.memory.facts_store import get_facts_store
@@ -61,12 +67,17 @@ class SynthesizerAgent(BaseAgent):
         # The synthesizer's merge call reads the whole blackboard (incl. large view
         # payloads), so it's the second-heaviest LLM call. Point it at a faster model
         # when configured; falls back to OPENAI_MODEL. Mirrors PLANNER_MODEL/ROUTER_MODEL.
-        synth_model = os.getenv("SYNTHESIZER_MODEL")
+        synth_model = get_settings().synthesizer_model
         if synth_model:
             self.llm_client = LLMClient(make_chat_model(synth_model), observer=self)
 
     def run(self, state: AgentState) -> AgentState:
-        if os.getenv("DEBUG_BREAK"):
+        """Produce the final answer via a fast path or LLM merge, then write back this turn.
+
+        Empty plan yields a clarification; a lone structured view passes through;
+        otherwise the LLM merges entries, marking ``[PARTIAL]`` when tasks errored.
+        """
+        if get_settings().debug_break:
             breakpoint()  # opt-in: only fires when DEBUG_BREAK is set (see .vscode/launch.json)
         updated = self._increment(state)
         blackboard: dict[str, dict] = state.get("blackboard") or {}

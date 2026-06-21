@@ -18,12 +18,12 @@ memory/redis_store.py, minus the optional/no-op branch.
 """
 from __future__ import annotations
 
-import os
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
 from genie.observability import get_logger
+from genie.platform.config import get_settings
 
 _log = get_logger(__name__)
 
@@ -74,15 +74,17 @@ _DEFAULT_INJECTION_PATTERNS = [
 
 
 def _ban_topics() -> list[str]:
-    raw = os.getenv("LLM_GUARD_BAN_TOPICS")
+    """Banned topics from LLM_GUARD_BAN_TOPICS (comma-separated) or the defaults."""
+    raw = get_settings().llm_guard_ban_topics
     if raw:
         return [t.strip() for t in raw.split(",") if t.strip()]
     return list(_DEFAULT_BAN_TOPICS)
 
 
 def _injection_patterns() -> list[str]:
+    """Code/script-injection regexes from LLM_GUARD_INJECTION_PATTERNS or the defaults."""
     # Regexes can contain commas, so split the override on newlines, not commas.
-    raw = os.getenv("LLM_GUARD_INJECTION_PATTERNS")
+    raw = get_settings().llm_guard_injection_patterns
     if raw:
         return [p.strip() for p in raw.splitlines() if p.strip()]
     return list(_DEFAULT_INJECTION_PATTERNS)
@@ -110,19 +112,19 @@ class LLMGuard:
 
         # Fail-closed by default: a scanner RUNTIME error blocks the request.
         # Set LLM_GUARD_FAIL_OPEN=1 to allow-through on scanner errors instead.
-        self._fail_open = os.getenv("LLM_GUARD_FAIL_OPEN", "0") == "1"
+        self._fail_open = get_settings().llm_guard_fail_open
         # Optional ONNX-runtime backend for the ML scanners. OFF by default: on this
         # CPU benchmarked ~3x SLOWER per scan and ~10x slower at startup than PyTorch,
         # because llm-guard's default ONNX models are non-quantized (the CPU win comes
         # from INT8 quantization, which these aren't). Left as an opt-in toggle for
         # setups with quantized ONNX models. Requires `pip install llm-guard[onnxruntime]`.
-        self._use_onnx = os.getenv("LLM_GUARD_USE_ONNX", "0") == "1"
+        self._use_onnx = get_settings().llm_guard_use_onnx
         # Run the read-only classifiers concurrently instead of summing their
         # latencies sequentially. On (default) ON the wall-time of a scan drops
         # to ~the slowest single scanner. Each scanner owns a distinct model, so
         # concurrent forward passes are safe. Set LLM_GUARD_PARALLEL=0 to fall
         # back to llm-guard's sequential scan_prompt/scan_output.
-        self._parallel = os.getenv("LLM_GUARD_PARALLEL", "1") == "1"
+        self._parallel = get_settings().llm_guard_parallel
         # EXPERIMENTAL, OFF by default. Use the locally-built INT8 ONNX classifiers
         # (scripts/quantize_guard_models.py) for the blocking scanners. Verdict on this
         # CPU (security/bench_guard.py): dynamic INT8 was ~3x SLOWER than PyTorch *and*
@@ -131,14 +133,14 @@ class LLMGuard:
         # re-running bench_guard and confirming both latency AND detection parity. Kept
         # as a gated toggle so better-quantized models can be re-evaluated. Falls back
         # per-model (logged) if a quantized file is missing, so it never aborts startup.
-        self._quantized = os.getenv("LLM_GUARD_ONNX_QUANTIZED", "0") == "1"
+        self._quantized = get_settings().llm_guard_onnx_quantized
         qmodels = self._build_quantized_models() if self._quantized else {}
         # PII / secret redaction scanners. ON by default. These are SANITIZING (they
         # never block) and the heaviest non-blocking cost — Anonymize/Sensitive each
         # run a NER model. Set LLM_GUARD_PII=0 to drop them when the app handles no
         # personal data, removing a NER forward pass from BOTH guards. The BLOCKING
         # scanners (injection/toxicity/banned-topics/regex) are unaffected.
-        self._pii = os.getenv("LLM_GUARD_PII", "1") == "1"
+        self._pii = get_settings().llm_guard_pii
         topics = _ban_topics()
         injection_patterns = _injection_patterns()
         self._vault = Vault()
@@ -283,6 +285,7 @@ class LLMGuard:
 
     # ------------------------------------------------------------------
     def _fail_result(self, text: str, stage: str, error: str) -> dict[str, Any]:
+        """Result for a scanner runtime error: block (fail-closed) unless fail-open."""
         _log.warning("llm_guard.scan_error", extra={"attrs": {"stage": stage, "error": error}})
         if self._fail_open:
             return {"valid": True, "sanitized": text, "findings": [], "scores": {}}
@@ -335,6 +338,7 @@ _store: LLMGuard | None = None
 
 
 def get_llm_guard() -> LLMGuard:
+    """Return the process-wide LLMGuard singleton, constructing (loading models) once."""
     global _store
     if _store is None:
         _store = LLMGuard()

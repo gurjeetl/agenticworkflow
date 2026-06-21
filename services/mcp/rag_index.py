@@ -11,10 +11,11 @@ The corpus root defaults to the repository root (``RAG_DOCS_DIR`` overrides it);
 from __future__ import annotations
 
 import math
-import os
 import re
 from collections import Counter
 from pathlib import Path
+
+from genie.platform.config import get_settings
 
 # services/mcp/rag_index.py -> repo root is three levels up.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -28,15 +29,18 @@ _B = 0.75
 
 
 def _tokenize(text: str) -> list[str]:
+    """Lowercase the text and split into alphanumeric terms for BM25 matching."""
     return _TOKEN_RE.findall(text.lower())
 
 
 def _docs_root() -> Path:
-    override = os.getenv("RAG_DOCS_DIR")
+    """Resolve the corpus root: ``RAG_DOCS_DIR`` if set, else the repo root."""
+    override = get_settings().rag_docs_dir
     return Path(override).resolve() if override else _REPO_ROOT
 
 
 def _corpus_files(root: Path) -> list[Path]:
+    """Collect indexable markdown: ``*.md`` at the root plus everything under ``docs/``."""
     files = sorted(root.glob("*.md"))
     docs_dir = root / "docs"
     if docs_dir.is_dir():
@@ -100,12 +104,14 @@ class DocIndex:
         self._df = df
 
     def _idf(self, term: str) -> float:
+        """BM25 inverse document frequency for a term; 0 when it appears in no chunk."""
         df = self._df.get(term, 0)
         if df == 0:
             return 0.0
         return math.log(1 + (self.N - df + 0.5) / (df + 0.5))
 
     def search(self, query: str, k: int = 4) -> list[dict]:
+        """Return the top-k chunks ranked by BM25 score for the query (empty if no match)."""
         q_terms = _tokenize(query)
         if not q_terms or self.N == 0:
             return []

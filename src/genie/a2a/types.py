@@ -29,12 +29,16 @@ ERR_AGENT_EXECUTION = -32001  # custom: the agent ran but returned an error
 
 # --- Message parts ----------------------------------------------------------
 class TextPart(BaseModel):
+    """A message part carrying free-text content."""
+
     kind: Literal["text"] = "text"
     text: str
     metadata: dict[str, Any] | None = None
 
 
 class DataPart(BaseModel):
+    """A message part carrying a structured JSON object (e.g. args or a view)."""
+
     kind: Literal["data"] = "data"
     data: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] | None = None
@@ -61,11 +65,15 @@ class Message(BaseModel):
 
 # --- Agent Card (discovery) -------------------------------------------------
 class AgentCapabilities(BaseModel):
+    """Optional A2A protocol features an agent supports (both unsupported here)."""
+
     streaming: bool = False
     pushNotifications: bool = False
 
 
 class AgentSkill(BaseModel):
+    """One advertised capability on an Agent Card (A2A ``AgentSkill``)."""
+
     id: str
     name: str
     description: str = ""
@@ -76,6 +84,8 @@ class AgentSkill(BaseModel):
 
 
 class AgentCard(BaseModel):
+    """A2A discovery document served at ``/.well-known/agent.json``."""
+
     name: str
     description: str = ""
     url: str
@@ -90,12 +100,16 @@ class AgentCard(BaseModel):
 
 # --- JSON-RPC envelopes -----------------------------------------------------
 class JsonRpcError(BaseModel):
+    """The ``error`` member of a JSON-RPC response."""
+
     code: int
     message: str
     data: dict[str, Any] | None = None
 
 
 class JsonRpcRequest(BaseModel):
+    """A JSON-RPC 2.0 request envelope (e.g. ``method='message/send'``)."""
+
     jsonrpc: Literal["2.0"] = "2.0"
     id: str | int | None = None
     method: str
@@ -103,6 +117,8 @@ class JsonRpcRequest(BaseModel):
 
 
 class JsonRpcResponse(BaseModel):
+    """A JSON-RPC 2.0 response envelope carrying exactly one of result/error."""
+
     jsonrpc: Literal["2.0"] = "2.0"
     id: str | int | None = None
     result: dict[str, Any] | None = None
@@ -111,10 +127,12 @@ class JsonRpcResponse(BaseModel):
 
 # --- Helpers ----------------------------------------------------------------
 def text_part(text: str) -> TextPart:
+    """Convenience constructor for a :class:`TextPart`."""
     return TextPart(text=text)
 
 
 def data_part(data: dict[str, Any]) -> DataPart:
+    """Convenience constructor for a :class:`DataPart`."""
     return DataPart(data=data)
 
 

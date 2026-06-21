@@ -1,3 +1,10 @@
+"""Outage demo agent: lists grid outages or describes a single one.
+
+Routes between two MCP-backed views: a top-N outage list (no args) and a
+per-outage detail view (when ``outage_id`` is present). ``run(state)`` is the
+entry point the graph executor calls; the ``__main__`` block runs it standalone
+as a self-registering A2A service.
+"""
 import json
 
 from genie.agents.base import BaseAgent
@@ -6,6 +13,13 @@ from genie.application.state import AgentState
 
 
 class OutageAgent(BaseAgent):
+    """Lists current grid outages or returns a structured detail view for one.
+
+    Reads from the outage MCP tools and produces both a short headline ``text``
+    and a structured ``view`` (``outage_list`` or ``outage_detail``) that a UI —
+    or a downstream chained step — can consume.
+    """
+
     system_prompt = "You are a grid-outage analyst summarizing outage reports."
     tool_names: list[str] = [
         "list_outage_ids",
@@ -15,12 +29,14 @@ class OutageAgent(BaseAgent):
 
     @staticmethod
     def _parse_json(s: str) -> dict:
+        """Best-effort JSON decode of an MCP tool result; return {} on bad/empty input."""
         try:
             return json.loads(s)
         except (json.JSONDecodeError, TypeError):
             return {}
 
     def _list_view(self) -> tuple[str, dict] | str:
+        """Build the top-N outage list view, or a plain message when none exist."""
         data = self._parse_json(self.call_mcp_tool("list_outage_ids", {}))
         items = data.get("items", [])
         total = data.get("total")
@@ -31,6 +47,7 @@ class OutageAgent(BaseAgent):
         return text, view
 
     def _detail_view(self, outage_id: int) -> tuple[str, dict] | str:
+        """Fetch metadata + analysis for one outage; return an error message if missing."""
         metadata = self._parse_json(
             self.call_mcp_tool("get_outage_metadata", {"outage_id": outage_id})
         )
@@ -53,6 +70,7 @@ class OutageAgent(BaseAgent):
         return text, view
 
     def run(self, state: AgentState) -> AgentState:
+        """Dispatch to the detail view when ``outage_id`` is given, else the list view."""
         outage_id = state.get("outage_id")
         if outage_id is not None:
             oid = int(outage_id)

@@ -1,13 +1,21 @@
+"""Plan/Subtask DAG models shared by the Planner, Orchestrator, and Executor.
+
+Defines the validated subtask graph and the wave decomposition (Kahn's
+algorithm) that orders execution by dependency.
+"""
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
 
 class DAGCycleError(ValueError):
+    """Raised when the subtask dependency graph contains a cycle (cannot be waved)."""
     pass
 
 
 class Subtask(BaseModel):
+    """One agent invocation in the plan: which agent, its args, and its dependencies."""
+
     id: str
     agent_id: str
     agent_version: str = "1.0.0"
@@ -17,9 +25,12 @@ class Subtask(BaseModel):
 
 
 class Plan(BaseModel):
+    """The full subtask DAG for one request, plus its wave decomposition."""
+
     subtasks: list[Subtask] = Field(default_factory=list)
 
     def by_id(self) -> dict[str, Subtask]:
+        """Index subtasks by id for dependency lookups."""
         return {t.id: t for t in self.subtasks}
 
     def waves(self) -> list[list[Subtask]]:

@@ -13,11 +13,11 @@ TTL index is the backstop that physically deletes dead docs.
 """
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
 
 import motor.motor_asyncio
 
+from genie.platform.config import get_settings
 from genie.registry.agent_meta import AgentMeta
 
 COLLECTION = "agent_registry"
@@ -28,18 +28,27 @@ def _now() -> datetime:
 
 
 class RegistryStore:
+    """MongoDB-backed registry: upsert/heartbeat/deregister + freshness-filtered reads.
+
+    One instance per process (see :func:`get_registry_store`). Liveness is enforced
+    by both the query (``_fresh_filter``) and a Mongo TTL index as a backstop.
+    """
+
     def __init__(self) -> None:
-        uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-        db_name = os.getenv("MONGODB_DB", "agent_memory")
-        self._ttl = int(os.getenv("REGISTRY_TTL_SECONDS", "90"))
+        _s = get_settings()
+        uri = _s.mongodb_uri
+        db_name = _s.mongodb_db
+        self._ttl = _s.registry_ttl_seconds
         self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
         self._coll = self._client[db_name][COLLECTION]
 
     @property
     def ttl_seconds(self) -> int:
+        """Liveness window in seconds; advertised to agents as their heartbeat TTL."""
         return self._ttl
 
     async def ensure_indexes(self) -> None:
+        """Create the lookup, freshness, and TTL-expiry indexes (idempotent)."""
         await self._coll.create_index("agent_id")
         await self._coll.create_index([("status", 1), ("last_heartbeat", -1)])
         # TTL backstop: Mongo deletes a doc once last_heartbeat is older than TTL.
@@ -83,11 +92,13 @@ class RegistryStore:
         return result.matched_count > 0
 
     async def deregister(self, instance_id: str) -> bool:
+        """Remove one instance. Returns False if it was already gone."""
         result = await self._coll.delete_one({"_id": instance_id})
         return result.deleted_count > 0
 
     # ------------------------------------------------------------------
     def _fresh_filter(self) -> dict:
+        """Query for active docs heartbeated within the TTL — excludes stale-but-unswept."""
         cutoff = _now() - timedelta(seconds=self._ttl)
         return {"status": "active", "last_heartbeat": {"$gte": cutoff}}
 
@@ -100,12 +111,14 @@ class RegistryStore:
         return out
 
     async def get_agent(self, agent_id: str) -> list[AgentMeta]:
+        """All live instances advertising a given ``agent_id`` (may be more than one)."""
         flt = {**self._fresh_filter(), "agent_id": agent_id}
         cursor = self._coll.find(flt)
         return [self._to_meta(doc) async for doc in cursor]
 
     @staticmethod
     def _to_meta(doc: dict) -> AgentMeta:
+        """Rebuild an AgentMeta from a stored doc, overlaying server-owned fields."""
         meta = AgentMeta.model_validate(doc.get("meta", {}))
         # Trust the server-owned liveness fields from the top-level doc.
         meta.last_heartbeat = doc.get("last_heartbeat")
@@ -114,6 +127,7 @@ class RegistryStore:
         return meta
 
     def close(self) -> None:
+        """Close the underlying Motor client."""
         self._client.close()
 
 
@@ -121,6 +135,7 @@ _store: RegistryStore | None = None
 
 
 def get_registry_store() -> RegistryStore:
+    """Return the process-wide RegistryStore singleton, creating it on first use."""
     global _store
     if _store is None:
         _store = RegistryStore()

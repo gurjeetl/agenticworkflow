@@ -14,12 +14,12 @@ what the system can answer.
 """
 from __future__ import annotations
 
-import os
 import re
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from genie.agents.base import BaseAgent, make_chat_model, patch
+from genie.platform.config import get_settings
 from genie.llm.client import LLMClient
 from genie.application.nodes._planner_dag import Plan, Subtask
 from genie.application.nodes._planner_parsing import extract_json, normalize_agent_id, render_capability_menu
@@ -43,6 +43,12 @@ _DEFAULT_MULTI_INTENT_PATTERN = r"(?i)\b(also|as well as|and also|additionally|m
 
 
 class RouterAgent(BaseAgent):
+    """Cheap front-of-graph triage that picks fast / chitchat / plan (see module doc).
+
+    Fails open to ``plan`` on any registry, LLM, or parse failure, so it can only
+    speed the pipeline up, never narrow what the system can answer.
+    """
+
     tool_names: list[str] = []
 
     def __init__(self) -> None:
@@ -50,16 +56,17 @@ class RouterAgent(BaseAgent):
         self._registry = get_registry_client()
         # Use a cheaper/faster model for routing when configured; the win of the
         # fast path is realised only if the triage call is cheap.
-        router_model = os.getenv("ROUTER_MODEL")
+        router_model = get_settings().router_model
         if router_model:
             self.llm_client = LLMClient(make_chat_model(router_model), observer=self)
-        self._min_confidence = float(os.getenv("ROUTER_MIN_CONFIDENCE", "0.7"))
+        self._min_confidence = get_settings().router_min_confidence
         self._multi_intent_re = re.compile(
-            os.getenv("ROUTER_MULTI_INTENT_PATTERN") or _DEFAULT_MULTI_INTENT_PATTERN
+            get_settings().router_multi_intent_pattern or _DEFAULT_MULTI_INTENT_PATTERN
         )
 
     # ------------------------------------------------------------------
     def _build_system_prompt(self, metas) -> str:
+        """Render the route-selection prompt with the live agent capability menu."""
         menu = render_capability_menu(metas)
         return (
             "You are a fast intent ROUTER sitting in front of a planner. Pick the "
@@ -87,7 +94,12 @@ class RouterAgent(BaseAgent):
 
     # ------------------------------------------------------------------
     def run(self, state: AgentState) -> AgentState:
-        if os.getenv("DEBUG_BREAK"):
+        """Triage the prompt into a route, building a one-task plan on a fast match.
+
+        Short-circuits to ``plan`` on registry outage or clear multi-intent
+        signals; otherwise asks the LLM and validates any ``fast`` decision.
+        """
+        if get_settings().debug_break:
             breakpoint()  # opt-in: only fires when DEBUG_BREAK is set (see .vscode/launch.json)
         updated = self._increment(state)
         user_msg = state.get("user_input") or ""
@@ -184,6 +196,7 @@ class RouterAgent(BaseAgent):
         )
 
     def _route_chitchat(self, state: AgentState) -> AgentState:
+        """Route to the Synthesizer with an empty plan (its clarification path)."""
         self.log_event("router.decision", route="chitchat")
         return patch(
             state,
@@ -194,5 +207,6 @@ class RouterAgent(BaseAgent):
         )
 
     def _route_plan(self, state: AgentState, *, reason: str = "default") -> AgentState:
+        """Fall through to the full Planner; ``reason`` records why for the tracer."""
         self.log_event("router.decision", route="plan", reason=reason)
         return patch(state, route="plan")

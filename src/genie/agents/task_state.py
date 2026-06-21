@@ -21,6 +21,11 @@ def build_task_state(
     run_id: str,
     blackboard: dict | None,
 ) -> AgentState:
+    """Build a fully-defaulted ``AgentState`` for one subtask.
+
+    Seeds the task identifiers and blackboard snapshot, then spreads ``args`` as
+    top-level keys so agents can read ``state["location"]`` etc. directly.
+    """
     task_state: AgentState = {
         "user_input": "",
         "current_task": task_id,

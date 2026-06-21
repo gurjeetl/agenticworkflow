@@ -23,7 +23,6 @@ Usage (per agent module)::
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 from contextlib import asynccontextmanager
 
@@ -46,6 +45,7 @@ from genie.a2a.types import (
     text_part,
 )
 from genie.observability import configure_logging, get_logger
+from genie.platform.config import get_settings
 from genie.agents.task_state import build_task_state
 from genie.registry.agent_meta import AgentMeta
 
@@ -56,22 +56,27 @@ _log = get_logger(__name__)
 
 # --- Config helpers ---------------------------------------------------------
 def _advertised_endpoint() -> str:
-    host = os.getenv("AGENT_ADVERTISE_HOST") or os.getenv("AGENT_HOST", "127.0.0.1")
-    port = os.getenv("AGENT_ADVERTISE_PORT") or os.getenv("AGENT_PORT", "8010")
+    """Base URL peers should use to reach this agent (advertise host/port override the bind)."""
+    _s = get_settings()
+    host = _s.agent_advertise_host or _s.agent_host
+    port = _s.agent_advertise_port or _s.agent_port
     return f"http://{host}:{port}"
 
 
 def _registry_base() -> str:
-    return os.getenv("REGISTRY_URL", "http://127.0.0.1:8002").rstrip("/")
+    """Base URL of the Registry Service this agent registers/heartbeats against."""
+    return get_settings().registry_url.rstrip("/")
 
 
 def _registry_headers() -> dict:
-    token = os.getenv("REGISTRY_AUTH_TOKEN")
+    """Auth headers for registry calls, empty when no registry auth token is set."""
+    token = get_settings().registry_auth_token
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 def require_a2a_auth(authorization: str | None = Header(None)) -> None:
-    token = os.getenv("AGENT_INVOKE_TOKEN")
+    """FastAPI dependency guarding ``/a2a``; a no-op unless an A2A invoke token is set."""
+    token = get_settings().agent_invoke_token
     if not token:
         return
     if authorization != f"Bearer {token}":
@@ -100,6 +105,7 @@ async def _register(client: httpx.AsyncClient, meta: AgentMeta) -> int | None:
 
 
 async def _heartbeat_loop(client: httpx.AsyncClient, meta: AgentMeta, interval: int) -> None:
+    """Periodically heartbeat the registry, re-registering if it forgot or restarted us."""
     while True:
         await asyncio.sleep(interval)
         try:
@@ -119,13 +125,20 @@ async def _heartbeat_loop(client: httpx.AsyncClient, meta: AgentMeta, interval: 
 
 # --- App factory ------------------------------------------------------------
 def create_agent_app(agent_cls: type, meta: AgentMeta) -> FastAPI:
+    """Build the FastAPI app exposing one agent as an A2A service.
+
+    Instantiates the agent once, stamps the advertised endpoint and a fresh
+    instance id onto its meta, and wires the registry register/heartbeat/
+    deregister lifecycle plus the health, agent-card, and ``/a2a`` routes.
+    """
     agent = agent_cls()  # loads LLM + MCP from env, once
     meta = meta.model_copy(update={"endpoint": _advertised_endpoint(), "instance_id": uuid.uuid4().hex})
-    default_interval = int(os.getenv("REGISTRY_HEARTBEAT_SECONDS", "30"))
+    default_interval = get_settings().registry_heartbeat_seconds
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        client = httpx.AsyncClient(timeout=float(os.getenv("REGISTRY_TIMEOUT_S", "3")))
+        """Register + start heartbeats on startup; cancel + deregister on shutdown."""
+        client = httpx.AsyncClient(timeout=get_settings().registry_timeout_s)
         interval = await _register(client, meta) or default_interval
         hb_task = asyncio.create_task(_heartbeat_loop(client, meta, interval))
         try:
@@ -146,6 +159,7 @@ def create_agent_app(agent_cls: type, meta: AgentMeta) -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict:
+        """Liveness probe identifying this agent and its current instance."""
         return {"status": "ok", "agent_id": meta.agent_id, "instance_id": meta.instance_id}
 
     @app.get("/.well-known/agent.json")
@@ -207,6 +221,6 @@ def create_agent_app(agent_cls: type, meta: AgentMeta) -> FastAPI:
 
 
 def run_agent(agent_cls: type, meta: AgentMeta) -> None:
-    host = os.getenv("AGENT_HOST", "127.0.0.1")
-    port = int(os.getenv("AGENT_PORT", "8010"))
-    uvicorn.run(create_agent_app(agent_cls, meta), host=host, port=port)
+    """Module ``__main__`` entry point: serve the agent app with uvicorn."""
+    _s = get_settings()
+    uvicorn.run(create_agent_app(agent_cls, meta), host=_s.agent_host, port=_s.agent_port)

@@ -1,3 +1,11 @@
+"""Registry data models: the ``AgentMeta`` record an agent advertises.
+
+Defines the schema an agent publishes to the Registry (capabilities, A2A skills,
+input/output field specs, liveness fields) plus the supporting ``FieldSpec`` and
+``Skill`` models. Skills are auto-derived from ``capability_tags`` when an agent
+doesn't set them explicitly, keeping the registry record and the A2A Agent Card
+in lockstep.
+"""
 from __future__ import annotations
 
 from datetime import datetime

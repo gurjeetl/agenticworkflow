@@ -22,6 +22,7 @@ async def get_conversation(thread_id: str):
 
 @router.delete("/conversations/{thread_id}")
 async def delete_conversation(thread_id: str):
+    """Delete one conversation's durable history (sidebar removal)."""
     store = get_mongo_store()
     await store.delete_conversation(thread_id)
     return {"deleted": thread_id}

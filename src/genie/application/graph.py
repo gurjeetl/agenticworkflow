@@ -1,3 +1,10 @@
+"""LangGraph wiring for the multi-agent pipeline.
+
+Builds and compiles the StateGraph that threads an ``AgentState`` through the
+nodes in order: input_guard → router → (fast | chitchat | full plan) →
+synthesizer → output_guard. The conditional-edge routers below pick the next
+node from state set by the preceding node.
+"""
 import mlflow
 from langgraph.graph import StateGraph, START, END
 
@@ -10,6 +17,7 @@ from genie.application.nodes.router import RouterAgent
 from genie.security import InputGuard, OutputGuard
 from genie.application.state import AgentState
 from genie.application.nodes.synthesizer import SynthesizerAgent
+from genie.platform.config import get_settings
 
 # Agents no longer run in-process: each runs as its own service and self-registers
 # with the Registry Service. The Planner discovers them and the Executor invokes
@@ -17,7 +25,12 @@ from genie.application.nodes.synthesizer import SynthesizerAgent
 
 
 def route_after_input_guard(state: AgentState) -> str:
-    decision = "blocked" if state.get("guard_block") else "router"
+    """Send a guard-blocked prompt straight to END, else continue into the pipeline.
+
+    Returns the neutral ``"continue"`` key; build_graph maps it to the Router when
+    the Router is enabled, or directly to the Planner when it is disabled.
+    """
+    decision = "blocked" if state.get("guard_block") else "continue"
 
     span = mlflow.get_current_active_span()
     if span is not None:
@@ -29,6 +42,7 @@ def route_after_input_guard(state: AgentState) -> str:
 
 
 def route_after_router(state: AgentState) -> str:
+    """Map the Router's route to its node: fast→executor, chitchat→synthesizer, else planner."""
     route = state.get("route") or "plan"
     decision = {"fast": "executor", "chitchat": "synthesizer"}.get(route, "planner")
 
@@ -42,6 +56,7 @@ def route_after_router(state: AgentState) -> str:
 
 
 def route_after_gate(state: AgentState) -> str:
+    """Loop back to the Planner on a replan decision, else converge on the Synthesizer."""
     action = state.get("next_action") or "synthesize"
     decision = "planner" if action == "replan" else "synthesizer"
 
@@ -60,8 +75,15 @@ def route_after_gate(state: AgentState) -> str:
 
 
 def build_graph():
+    """Construct, wire, and compile the pipeline StateGraph with an in-memory checkpointer.
+
+    The Router triage node is optional (``settings.router_enabled``): when disabled
+    it is omitted from the graph and the input guard hands off directly to the
+    Planner, so every request runs the full planning pipeline.
+    """
+    router_enabled = get_settings().router_enabled
+
     input_guard = InputGuard()
-    router = RouterAgent()
     planner = PlannerAgent()
     orchestrator = Orchestrator()
     executor = Executor()
@@ -72,7 +94,11 @@ def build_graph():
     graph = StateGraph(AgentState)
 
     graph.add_node("input_guard", input_guard.run)
-    graph.add_node("router", router.run)
+    if router_enabled:
+        # Construct the Router only when enabled — it loads a local intent
+        # classifier, so skipping it avoids that cost entirely when disabled.
+        router = RouterAgent()
+        graph.add_node("router", router.run)
     graph.add_node("planner", planner.run)
     graph.add_node("orchestrator", orchestrator.run)
     graph.add_node("executor", executor.run)
@@ -81,27 +107,29 @@ def build_graph():
     graph.add_node("output_guard", output_guard.run)
 
     # Input guard scans the user prompt first. Blocked → straight to END with a
-    # safe refusal; otherwise the (PII-redacted) prompt flows to the Router, which
-    # fast-paths to the executor, sends chitchat to the synthesizer, or falls
-    # through to the full planner pipeline.
+    # safe refusal; otherwise the (PII-redacted) prompt flows to the Router (when
+    # enabled) — which fast-paths to the executor, sends chitchat to the
+    # synthesizer, or falls through to the full planner — or straight to the
+    # Planner when the Router is disabled.
     graph.add_edge(START, "input_guard")
     graph.add_conditional_edges(
         "input_guard",
         route_after_input_guard,
         {
-            "router": "router",
+            "continue": "router" if router_enabled else "planner",
             "blocked": END,
         },
     )
-    graph.add_conditional_edges(
-        "router",
-        route_after_router,
-        {
-            "planner": "planner",
-            "executor": "executor",
-            "synthesizer": "synthesizer",
-        },
-    )
+    if router_enabled:
+        graph.add_conditional_edges(
+            "router",
+            route_after_router,
+            {
+                "planner": "planner",
+                "executor": "executor",
+                "synthesizer": "synthesizer",
+            },
+        )
     graph.add_edge("planner", "orchestrator")
     graph.add_edge("orchestrator", "executor")
     graph.add_edge("executor", "gate")

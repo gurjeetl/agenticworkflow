@@ -1,9 +1,15 @@
+"""Optional sync Milvus store: semantic long-term memory (embedded answer vectors
+recalled per thread, deduped on write). No-ops when MILVUS_URI/MILVUS_DB_PATH is
+unset or pymilvus is missing, so the framework runs without Milvus."""
+
 from __future__ import annotations
 
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Any
+
+from genie.platform.config import get_settings
 
 _log = logging.getLogger(__name__)
 
@@ -38,16 +44,17 @@ class MilvusVectorStore:
         # MILVUS_URI may be a remote http(s) endpoint OR a local Milvus Lite file
         # (e.g. ./milvus_local.db — no server/Docker needed). MILVUS_DB_PATH is an
         # explicit alias for the Lite-file case.
-        self._uri = os.getenv("MILVUS_URI") or os.getenv("MILVUS_DB_PATH")
+        settings = get_settings()
+        self._uri = settings.milvus_uri or settings.milvus_db_path
         # pymilvus' ORM reads os.environ['MILVUS_URI'] at import and only accepts
         # http(s) URIs — a local file path there would crash `import pymilvus`
         # process-wide. Move any non-http value out of the env before importing.
         env_uri = os.environ.get("MILVUS_URI")
         if env_uri and not env_uri.lower().startswith("http"):
             os.environ.pop("MILVUS_URI", None)
-        self._collection = os.getenv("MILVUS_COLLECTION", _DEFAULT_COLLECTION)
-        self._embed_model = os.getenv("OPENAI_EMBED_MODEL", _DEFAULT_EMBED_MODEL)
-        self._dim = int(os.getenv("OPENAI_EMBED_DIM", str(_DEFAULT_DIM)))
+        self._collection = settings.milvus_collection
+        self._embed_model = settings.openai_embed_model
+        self._dim = settings.openai_embed_dim
         self._client = None
         self._embeddings = None
 
@@ -60,13 +67,14 @@ class MilvusVectorStore:
             _log.warning("milvus.disabled", extra={"attrs": {"reason": "pymilvus not installed"}})
             return
         try:
-            self._client = MilvusClient(uri=self._uri, token=os.getenv("MILVUS_TOKEN") or "")
+            self._client = MilvusClient(uri=self._uri, token=get_settings().milvus_token or "")
         except Exception as e:
             _log.warning("milvus.connect_failed", extra={"attrs": {"uri": self._uri, "error": str(e)}})
             self._client = None
 
     @property
     def enabled(self) -> bool:
+        """True only when a Milvus client connected successfully at construction."""
         return self._client is not None
 
     # ------------------------------------------------------------------
@@ -76,10 +84,11 @@ class MilvusVectorStore:
             if self._embeddings is None:
                 from langchain_openai import OpenAIEmbeddings
 
+                _s = get_settings()
                 self._embeddings = OpenAIEmbeddings(
                     model=self._embed_model,
-                    api_key=os.getenv("OPENAI_API_KEY"),
-                    base_url=os.getenv("OPENAI_BASE_URL") or None,
+                    api_key=_s.openai_api_key,
+                    base_url=_s.openai_base_url or None,
                 )
             return self._embeddings.embed_query(text)
         except Exception as e:
@@ -87,6 +96,8 @@ class MilvusVectorStore:
             return None
 
     def ensure_collection(self) -> None:
+        """Load the memory collection, creating its schema + cosine index on first
+        use. No-op when Milvus is disabled; failures are logged and swallowed."""
         if not self._client:
             return
         try:
@@ -196,6 +207,7 @@ class MilvusVectorStore:
             return {"enabled": True, "inserted": False, "reason": str(e)}
 
     def close(self) -> None:
+        """Close the Milvus client if connected (errors swallowed)."""
         if self._client:
             try:
                 self._client.close()
@@ -208,6 +220,7 @@ _store: MilvusVectorStore | None = None
 
 
 def get_vector_store() -> MilvusVectorStore:
+    """Return the process-wide MilvusVectorStore singleton, creating it on first use."""
     global _store
     if _store is None:
         _store = MilvusVectorStore()

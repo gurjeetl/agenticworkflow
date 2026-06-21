@@ -1,3 +1,10 @@
+"""Structured (JSON) logging wired to also surface logs inside MLflow spans.
+
+``configure_logging`` installs two root handlers: a JSON stdout formatter for
+machine-readable logs, and :class:`MLflowSpanHandler` which attaches each record
+to the active MLflow span so logs and traces stay correlated. Modules obtain a
+logger via :func:`get_logger` and pass structured fields through ``extra={"attrs": ...}``.
+"""
 import json
 import logging
 import sys
@@ -9,7 +16,10 @@ _configured = False
 
 
 class JsonFormatter(logging.Formatter):
+    """Render each log record as a single JSON line, flattening ``extra['attrs']``."""
+
     def format(self, record: logging.LogRecord) -> str:
+        """Build the JSON payload (time/level/logger/msg + attrs + any exception)."""
         payload = {
             "time": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname,
@@ -30,6 +40,7 @@ class MLflowSpanHandler(logging.Handler):
     """Attach every log record emitted inside an active MLflow span as a span event."""
 
     def emit(self, record: logging.LogRecord) -> None:
+        """Add the record as a span event; silently no-op when no span is active."""
         try:
             span = mlflow.get_current_active_span()
             if span is None:
@@ -47,6 +58,7 @@ class MLflowSpanHandler(logging.Handler):
 
 
 def configure_logging(level: str | None = None) -> None:
+    """Install the JSON + MLflow-span root handlers once (idempotent)."""
     global _configured
     if _configured:
         return
@@ -64,4 +76,5 @@ def configure_logging(level: str | None = None) -> None:
 
 
 def get_logger(name: str | None = None) -> logging.Logger:
+    """Return a standard logger (typically ``get_logger(__name__)``)."""
     return logging.getLogger(name)

@@ -1,3 +1,10 @@
+"""RAG demo agent: grounded documentation Q&A with citations.
+
+Retrieves relevant doc chunks via the ``search_docs`` MCP tool and has the LLM
+compose an answer from only that context, citing sources as [n]. ``run(state)``
+is the entry point the graph executor calls; the ``__main__`` block runs it
+standalone as a self-registering A2A service.
+"""
 import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -26,12 +33,18 @@ class RagAgent(BaseAgent):
 
     @staticmethod
     def _parse_json(s: str) -> dict:
+        """Best-effort JSON decode of an MCP tool result; return {} on bad/empty input."""
         try:
             return json.loads(s)
         except (json.JSONDecodeError, TypeError):
             return {}
 
     def _answer(self, query: str) -> tuple[str, dict] | str:
+        """Retrieve doc chunks, ask the LLM for a grounded answer, and attach a sources view.
+
+        Returns a plain message when retrieval finds nothing, otherwise
+        ``(answer, view)`` where ``view`` lists the cited chunk sources/scores.
+        """
         data = self._parse_json(self.call_mcp_tool("search_docs", {"query": query, "k": 4}))
         chunks = data.get("chunks", [])
         if not chunks:
@@ -63,6 +76,7 @@ class RagAgent(BaseAgent):
         return answer, view
 
     def run(self, state: AgentState) -> AgentState:
+        """Answer the user's question from the docs, or prompt for one if absent."""
         query = (state.get("query") or state.get("user_input") or "").strip()
         if not query:
             return self.answer_with(

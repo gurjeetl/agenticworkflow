@@ -1,0 +1,23 @@
+# Template for config/local.yaml — copy to config/local.yaml and fill in.
+#
+#   cp config/local.yaml.example config/local.yaml
+#
+# config/local.yaml is gitignored and holds secrets + machine-specific overrides.
+# It is layered on top of config/default.yaml (these values win). NEVER commit the
+# real config/local.yaml.
+
+# OpenAI (or OpenAI-compatible) credentials — REQUIRED.
+openai_api_key: sk-...
+# openai_base_url: https://api.openai.com/v1
+
+# MLflow tracking-server backend store (PostgreSQL DSN) — read by scripts/run-all.ps1
+# to launch the MLflow server. Required to start the local MLflow server.
+mlflow_backend_store_uri: postgresql://postgres:postgres@localhost:5432/mlflow
+
+# Optional secrets / per-machine overrides:
+# mcp_auth_token: ""
+# registry_auth_token: ""
+# agent_invoke_token: ""
+# milvus_token: ""
+# Point MLflow at a local store instead of the :5000 server, for example:
+# mlflow_tracking_uri: sqlite:///mlflow_local.db

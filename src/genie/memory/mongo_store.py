@@ -1,10 +1,15 @@
-import os
+"""Async (motor) MongoDB store: per-thread session messages plus the durable
+``conversations`` collection. The required primary read path for chat history and
+the conversation list/resume UI."""
+
 from datetime import datetime, timezone
 
 import motor.motor_asyncio
 from langchain_core.messages import BaseMessage, messages_from_dict, messages_to_dict
 from pymongo import DESCENDING
 from pymongo.errors import OperationFailure
+
+from genie.platform.config import get_settings
 
 # Hot recent-context cache TTL. Short-term memory is the fast working set for an
 # active session; the durable `conversations` collection (no TTL) is the source
@@ -22,9 +27,13 @@ def _title_from(messages: list[BaseMessage]) -> str:
 
 
 class MongoMemoryStore:
+    """Async message memory: a TTL'd short-term hot cache fronting a durable,
+    never-expiring ``conversations`` collection, plus read-only access to the
+    structured facts owned by the sync FactsStore. MongoDB is required."""
+
     def __init__(self):
-        uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-        db_name = os.getenv("MONGODB_DB", "agent_memory")
+        uri = get_settings().mongodb_uri
+        db_name = get_settings().mongodb_db
         self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
         self._db = self._client[db_name]
         self._short_term = self._db["short_term_memory"]
@@ -38,6 +47,8 @@ class MongoMemoryStore:
         self._facts = self._db["agent_facts"]
 
     async def ensure_indexes(self):
+        """Create the TTL/recency indexes, reconciling a pre-existing short-term
+        TTL index whose options differ from the current setting."""
         # 24-hour TTL on short-term conversation docs (hot cache only).
         try:
             await self._short_term.create_index("updated_at", expireAfterSeconds=_SHORT_TERM_TTL_SECONDS)
@@ -81,6 +92,8 @@ class MongoMemoryStore:
         messages: list[BaseMessage],
         session_notes: list[str],
     ):
+        """Persist the turn to both stores: the hot short-term cache (with session
+        notes) and the durable conversation (whose title is fixed on first write)."""
         dict_msgs = messages_to_dict(messages)
         now = datetime.now(timezone.utc)
         # Hot cache (1-hour TTL).
@@ -132,6 +145,7 @@ class MongoMemoryStore:
         return turns
 
     async def delete_conversation(self, thread_id: str):
+        """Remove a conversation from both the durable and short-term cache stores."""
         await self._conversations.delete_one({"_id": thread_id})
         await self._short_term.delete_one({"_id": thread_id})
 
@@ -148,6 +162,7 @@ class MongoMemoryStore:
         return out
 
     def close(self):
+        """Close the underlying motor client."""
         self._client.close()
 
 
@@ -155,6 +170,7 @@ _store: MongoMemoryStore | None = None
 
 
 def get_mongo_store() -> MongoMemoryStore:
+    """Return the process-wide MongoMemoryStore singleton, creating it on first use."""
     global _store
     if _store is None:
         _store = MongoMemoryStore()

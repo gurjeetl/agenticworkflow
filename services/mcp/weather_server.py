@@ -28,6 +28,7 @@ _OUTAGE_INDEX: dict[int, dict[str, Any]] = {}
 
 
 def _load_outage_data() -> dict[str, Any]:
+    """Load and cache the outage report, building an id -> outage lookup index once."""
     global _OUTAGE_CACHE
     if _OUTAGE_CACHE is None:
         with OUTAGE_DATA_PATH.open(encoding="utf-8") as f:

@@ -10,6 +10,7 @@ router = APIRouter()
 
 @router.get("/state/{thread_id}")
 async def get_state(thread_id: str):
+    """Return the persisted graph checkpoint values for a thread (introspection)."""
     config = get_thread_config(thread_id)
     snapshot = get_graph().get_state(config)
     return snapshot.values

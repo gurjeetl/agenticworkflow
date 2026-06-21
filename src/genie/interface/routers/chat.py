@@ -1,5 +1,4 @@
 """Chat endpoints: run the full graph (/chat) and a step-by-step trace (/chat/trace)."""
-import os
 import time
 import uuid
 
@@ -14,6 +13,7 @@ from genie.application.graph import get_graph
 from genie.memory.mongo_store import get_mongo_store
 from genie.memory.redis_store import get_redis_store
 from genie.observability import get_logger
+from genie.platform.config import get_settings
 
 router = APIRouter()
 _log = get_logger(__name__)
@@ -23,11 +23,14 @@ _DB_OP_PRODUCERS = {"planner", "executor", "synthesizer"}
 
 
 class ChatRequest(BaseModel):
+    """A chat turn: the user ``message`` plus the conversation's ``thread_id``."""
+
     message: str
     thread_id: str
 
 
 def _base_state(message: str, thread_id: str, run_id: str, prior_messages, long_term_keys, prior_values=None) -> dict:
+    """Build the initial graph ``AgentState`` for one run, seeded with prior memory."""
     prior_values = prior_values or {}
     return {
         "user_input": message,
@@ -72,6 +75,11 @@ def _base_state(message: str, thread_id: str, run_id: str, prior_messages, long_
 
 @router.post("/chat")
 async def chat(req: ChatRequest):
+    """Run the full agent graph for one turn and return the final answer + view.
+
+    Loads prior session messages/facts, invokes the graph under a traced span,
+    persists the resulting messages, and degrades to an apology on any failure.
+    """
     graph = get_graph()
     with mlflow.start_span(name="chat.request", span_type=SpanType.CHAIN) as span:
         span.set_inputs({"thread_id": req.thread_id, "message_length": len(req.message)})
@@ -125,7 +133,7 @@ async def chat_trace(req: ChatRequest):
     Gate → Synthesizer execute.
     """
     graph = get_graph()
-    if os.getenv("DEBUG_BREAK"):
+    if get_settings().debug_break:
         breakpoint()  # opt-in: only fires when DEBUG_BREAK is set (see .vscode/launch.json)
     run_id = uuid.uuid4().hex
     config = get_thread_config(req.thread_id + ":trace:" + run_id)  # isolated graph checkpoint per run

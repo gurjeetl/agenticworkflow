@@ -1,3 +1,8 @@
+"""MCPClient: builds MCP server config from env/settings, loads tools, unwraps results.
+
+This is the platform's MCP connectivity surfaced to inheriting agents — it turns
+configured servers into permission-filtered LangChain tools.
+"""
 import os
 from typing import Protocol
 
@@ -11,6 +16,7 @@ from genie.mcp.config import MCPAgentConfig, MCPServerConfig, MCPTransport
 
 
 class _Observer(Protocol):
+    """Structural type for the host (the agent) that receives warning/error logs."""
     def log(self, level: str, event: str, **attrs) -> None: ...
 
 
@@ -57,6 +63,7 @@ class MCPClient:
     def _build_server(
         self, *, name: str, url: str, transport_str: str, token: str, timeout: float
     ) -> MCPServerConfig:
+        """Build one MCPServerConfig, falling back to SSE for an unknown transport string."""
         try:
             transport = MCPTransport(transport_str)
         except ValueError:
@@ -80,6 +87,11 @@ class MCPClient:
         config: MCPAgentConfig,
         tool_names: list[str] | None,
     ) -> list[BaseTool]:
+        """Connect to the configured servers and return the usable tool set.
+
+        When ``tool_names`` is given, narrow to those names first; the result is
+        then run through permission filtering before being handed to the agent.
+        """
         server_map = {
             s.name: {
                 "transport": s.transport.value,

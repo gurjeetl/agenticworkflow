@@ -12,13 +12,13 @@ from worker threads; the network call itself happens outside the lock.
 """
 from __future__ import annotations
 
-import os
 import threading
 import time
 
 import httpx
 
 from genie.observability import get_logger
+from genie.platform.config import get_settings
 from genie.registry.agent_meta import AgentMeta
 
 _log = get_logger(__name__)
@@ -29,17 +29,24 @@ class RegistryUnavailable(RuntimeError):
 
 
 class RegistryClient:
+    """Thread-safe, TTL-cached HTTP view of the Registry Service.
+
+    ``list_active``/``get`` serve from an in-process cache (one fetch per TTL
+    window); on a fetch failure it can serve the last good snapshot stale.
+    """
+
     def __init__(
         self,
         base_url: str | None = None,
         cache_ttl_s: float | None = None,
         timeout_s: float | None = None,
     ) -> None:
-        self._base_url = (base_url or os.getenv("REGISTRY_URL", "http://127.0.0.1:8002")).rstrip("/")
-        self._cache_ttl = float(cache_ttl_s if cache_ttl_s is not None else os.getenv("REGISTRY_CACHE_TTL_S", "5"))
-        self._timeout = float(timeout_s if timeout_s is not None else os.getenv("REGISTRY_TIMEOUT_S", "3"))
-        self._serve_stale = os.getenv("REGISTRY_SERVE_STALE", "1") == "1"
-        token = os.getenv("REGISTRY_AUTH_TOKEN")
+        _s = get_settings()
+        self._base_url = (base_url or _s.registry_url).rstrip("/")
+        self._cache_ttl = float(cache_ttl_s if cache_ttl_s is not None else _s.registry_cache_ttl_s)
+        self._timeout = float(timeout_s if timeout_s is not None else _s.registry_timeout_s)
+        self._serve_stale = _s.registry_serve_stale
+        token = _s.registry_auth_token
         self._headers = {"Authorization": f"Bearer {token}"} if token else {}
         self._lock = threading.Lock()
         self._cache: list[AgentMeta] | None = None
@@ -48,6 +55,7 @@ class RegistryClient:
 
     # ------------------------------------------------------------------
     def list_active(self, *, force_refresh: bool = False) -> list[AgentMeta]:
+        """Live agents, from cache when fresh else a network fetch (stale on failure)."""
         with self._lock:
             fresh = self._cache is not None and (time.monotonic() - self._cache_at) < self._cache_ttl
             if fresh and not force_refresh:
@@ -65,14 +73,17 @@ class RegistryClient:
         return agents
 
     def get(self, agent_id: str) -> AgentMeta | None:
+        """First live instance advertising ``agent_id``, or None if absent."""
         return next((m for m in self.list_active() if m.agent_id == agent_id), None)
 
     def invalidate(self) -> None:
+        """Drop the cache so the next call re-fetches (e.g. after a discovery miss)."""
         with self._lock:
             self._cache, self._cache_at = None, 0.0
 
     # ------------------------------------------------------------------
     def _fetch_agents(self) -> list[AgentMeta]:
+        """GET /agents and parse to AgentMeta, skipping individual bad records."""
         try:
             resp = self._client.get(f"{self._base_url}/agents", headers=self._headers)
             resp.raise_for_status()
@@ -93,6 +104,7 @@ _default_client: RegistryClient | None = None
 
 
 def get_registry_client() -> RegistryClient:
+    """Return the process-wide RegistryClient singleton, creating it on first use."""
     global _default_client
     if _default_client is None:
         _default_client = RegistryClient()

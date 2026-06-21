@@ -1,20 +1,21 @@
-"""Central platform configuration via pydantic-settings.
+"""Central platform configuration via pydantic-settings — YAML-first.
 
-A single ``Settings`` object is the platform's source of truth for configuration.
-It reads from (in priority order):
+A single ``Settings`` object is the platform's source of truth. Configuration is
+driven by YAML; resolution order (highest priority first):
 
-1. Process environment variables (the existing unprefixed names — ``OPENAI_MODEL``,
-   ``MCP_SERVER_URL``, ``MONGODB_URI``, … — so behavior is unchanged from the old
-   scattered ``os.getenv`` calls).
-2. A YAML file (``config/default.yaml`` or ``$GENIE_CONFIG_FILE``). Flat keys are
-   used only when the matching env var is absent; nested structures
-   (``mcp_services``, ``llm_services``) come from YAML because env vars cannot
-   express nested dicts.
-3. The defaults declared below (identical to the old inline ``os.getenv`` defaults).
+1. ``config/local.yaml`` — gitignored. Secrets (API keys, tokens, DB DSNs) and
+   machine-specific overrides. NEVER commit this file.
+2. ``config/default.yaml`` — committed. The canonical, non-secret configuration.
+   (``$GENIE_CONFIG_FILE`` overrides this path.)
+3. Environment variables (the unprefixed names — ``OPENAI_API_KEY``, ``MONGODB_URI``,
+   …). Only used for keys NOT set in any YAML — a fallback, no longer the primary
+   path. Useful for injecting a secret without writing it to a file.
+4. The field defaults declared below.
 
-Migration note: subsystems are being moved onto ``get_settings()`` incrementally.
-Because the fields bind to the same env names the code already used, a module that
-still calls ``os.getenv`` and a module that reads ``Settings`` observe the same value.
+YAML is authoritative: a key set in YAML overrides the same environment variable.
+Nested structures (``mcp_services``, ``llm_services``) come only from YAML, since
+env vars cannot express nested dicts. All modules read configuration through
+``get_settings()`` rather than ``os.getenv`` so YAML drives the whole platform.
 """
 from __future__ import annotations
 
@@ -51,6 +52,12 @@ class LLMModelConfig(BaseModel):
 # ── Top-level Settings ────────────────────────────────────────────────────────
 
 class Settings(BaseSettings):
+    """The platform's single configuration object (env > YAML > field defaults).
+
+    Fields bind to the existing unprefixed env-var names so a module reading
+    ``Settings`` and one still calling ``os.getenv`` observe identical values.
+    """
+
     # env_prefix="" + case_sensitive=False → field `openai_model` binds to env
     # `OPENAI_MODEL`, preserving every existing variable name.
     model_config = SettingsConfigDict(
@@ -68,8 +75,8 @@ class Settings(BaseSettings):
     # str (not float) so a blank OPENAI_TEMPERATURE= in .env is treated as "unset"
     # rather than raising a coercion error; coerced to float at the use site.
     openai_temperature: str | None = None
-    openai_embed_model: str | None = None
-    openai_embed_dim: int | None = None
+    openai_embed_model: str = "text-embedding-3-small"
+    openai_embed_dim: int = 1536
     # Per-component model overrides (None → fall back to openai_model)
     router_model: str | None = None
     planner_model: str | None = None
@@ -94,7 +101,7 @@ class Settings(BaseSettings):
     milvus_uri: str | None = None
     milvus_db_path: str | None = None
     milvus_token: str | None = None
-    milvus_collection: str | None = None
+    milvus_collection: str = "long_term_memory"
 
     # ── Registry / discovery ─────────────────────────────────────────────────
     registry_url: str = "http://127.0.0.1:8002"
@@ -123,11 +130,15 @@ class Settings(BaseSettings):
     llm_guard_injection_patterns: str | None = None
 
     # ── Router ───────────────────────────────────────────────────────────────
+    # Master switch for the Router triage node. When False the pipeline skips the
+    # Router entirely and every prompt goes straight to the full Planner pipeline
+    # (no fast-path / chitchat shortcut). Set ROUTER_ENABLED=0 to disable.
+    router_enabled: bool = False
     router_min_confidence: float = 0.7
     router_intent_classifier: bool = True
-    router_intent_model: str | None = None
-    router_intent_threshold: float | None = None
-    router_intent_min_agents: int | None = None
+    router_intent_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    router_intent_threshold: float = 0.30
+    router_intent_min_agents: int = 2
     router_multi_intent_pattern: str | None = None
 
     # ── Planner ──────────────────────────────────────────────────────────────
@@ -143,28 +154,37 @@ class Settings(BaseSettings):
     rag_docs_dir: str | None = None
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "Settings":
-        """Load settings from a YAML file; env vars win for flat fields."""
-        yaml_data: dict[str, Any] = {}
-        try:
-            import yaml
+    def from_yaml(cls, *paths: str | Path) -> "Settings":
+        """Build Settings from one or more YAML files layered over env + defaults.
 
-            with open(path) as fh:
-                loaded = yaml.safe_load(fh)
-                if isinstance(loaded, dict):
-                    yaml_data = loaded
-        except (ImportError, OSError):
-            pass
+        YAML is **authoritative**: a value set in YAML overrides the same key from
+        an environment variable. Multiple files are layered in order (later files
+        win), so ``from_yaml(default_yaml, local_yaml)`` lets a gitignored
+        ``local.yaml`` override the committed ``default.yaml``. Keys absent from
+        every YAML fall back to the env var (useful for secrets) then the field
+        default. Nested ``mcp_services`` / ``llm_services`` come only from YAML.
+        """
+        merged: dict[str, Any] = {}
+        for path in paths:
+            if not path:
+                continue
+            try:
+                import yaml
 
-        mcp_raw = yaml_data.pop("mcp_services", None)
-        llm_raw = yaml_data.pop("llm_services", None)
+                with open(path) as fh:
+                    loaded = yaml.safe_load(fh)
+                    if isinstance(loaded, dict):
+                        merged.update(loaded)  # later file overrides earlier
+            except (ImportError, OSError):
+                pass
 
-        instance = cls()  # env + defaults (authoritative for flat fields)
+        mcp_raw = merged.pop("mcp_services", None)
+        llm_raw = merged.pop("llm_services", None)
 
-        # Flat YAML values only when the matching env var is absent.
-        updates: dict[str, Any] = {
-            k: v for k, v in yaml_data.items() if k.upper() not in os.environ
-        }
+        instance = cls()  # env + field defaults — the fallback for keys not in YAML
+
+        # YAML flat values are authoritative — they override env for any key they set.
+        updates: dict[str, Any] = dict(merged)
         if mcp_raw and isinstance(mcp_raw, dict):
             updates["mcp_services"] = {
                 name: MCPServiceConfig.model_validate(svc) for name, svc in mcp_raw.items()
@@ -182,25 +202,36 @@ _lock = threading.Lock()
 
 
 def get_settings() -> Settings:
-    """Return the cached Settings singleton.
+    """Return the cached Settings singleton, sourced primarily from YAML.
 
-    Resolution: ``$GENIE_CONFIG_FILE`` → ``<project_root>/config/default.yaml`` →
-    ``config/default.yaml`` in the CWD → env-only.
+    Layering (later wins): ``config/default.yaml`` (committed, the canonical
+    config) then ``config/local.yaml`` (gitignored — secrets and machine-specific
+    overrides). Both are authoritative over environment variables; env vars only
+    fill keys absent from every YAML (handy for secrets you'd rather not put in a
+    file). ``$GENIE_CONFIG_FILE`` overrides the default.yaml location.
     """
     global _settings
     if _settings is None:
         with _lock:
             if _settings is None:
-                config_file = os.environ.get("GENIE_CONFIG_FILE")
-                if config_file is None:
-                    # src/genie/platform/config.py → project root is 4 levels up.
-                    project_root = Path(__file__).resolve().parents[3]
-                    anchor = project_root / "config" / "default.yaml"
-                    if anchor.exists():
-                        config_file = str(anchor)
-                    elif Path("config/default.yaml").exists():
-                        config_file = "config/default.yaml"
-                _settings = Settings.from_yaml(config_file) if config_file else Settings()
+                # src/genie/platform/config.py → project root is 4 levels up.
+                project_root = Path(__file__).resolve().parents[3]
+                config_dir = project_root / "config"
+
+                base = os.environ.get("GENIE_CONFIG_FILE")
+                if base is None:
+                    anchor = config_dir / "default.yaml"
+                    base = str(anchor) if anchor.exists() else (
+                        "config/default.yaml" if Path("config/default.yaml").exists() else None
+                    )
+
+                local = config_dir / "local.yaml"
+                local_path = str(local) if local.exists() else (
+                    "config/local.yaml" if Path("config/local.yaml").exists() else None
+                )
+
+                paths = [p for p in (base, local_path) if p]
+                _settings = Settings.from_yaml(*paths) if paths else Settings()
     return _settings
 
 

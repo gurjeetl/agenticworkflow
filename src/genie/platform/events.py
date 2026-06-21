@@ -1,4 +1,13 @@
+"""Canonical event-name constants for structured logging and span events.
+
+Centralizing the dotted event names here keeps them consistent across agents,
+tools, and the MCP layer so traces and log queries can filter on stable keys.
+"""
+
+
 class Events:
+    """Namespace of dotted event-name string constants used in logs/spans."""
+
     FINAL_OUTPUT_SET = "final.output.set"
     AGENT_ERROR_SET = "agent.error_set"
     AGENT_SCRATCHPAD = "agent.scratchpad"

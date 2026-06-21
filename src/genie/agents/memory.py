@@ -1,3 +1,4 @@
+"""Per-agent memory: short-term message-window trimming and long-term fact rendering."""
 from langchain_core.messages import BaseMessage
 
 
@@ -12,10 +13,12 @@ class AgentMemory:
         self.max_window = max_window
 
     def trim(self, messages: list[BaseMessage]) -> list[BaseMessage]:
+        """Keep only the most recent ``max_window`` messages to bound prompt size."""
         if len(messages) <= self.max_window:
             return messages
         return messages[-self.max_window:]
 
     @staticmethod
     def facts_block(facts: list[str]) -> str:
+        """Render long-term facts as a bulleted block for inclusion in the prompt."""
         return "\n".join(f"- {f}" for f in facts)

@@ -1,3 +1,9 @@
+"""BaseAgent: the inheritance base every application agent subclasses.
+
+Composes an LLMClient, MCPClient, and AgentMemory into a single agent, and
+provides the shared run loop, state helpers, and MCP/A2A plumbing so subclasses
+only declare their prompt, tools, and any custom work.
+"""
 import asyncio
 from typing import Callable
 
@@ -77,12 +83,15 @@ class BaseAgent(Observable):
     # ------------------------------------------------------------------
 
     def _increment(self, state: AgentState) -> AgentState:
+        """Bump the per-run iteration counter (used for loop/limit accounting)."""
         return patch(state, iteration_count=state.get("iteration_count", 0) + 1)
 
     def append_response(self, state: AgentState, text: str) -> AgentState:
+        """Append an assistant message without marking the task complete."""
         return patch(state, messages=[AIMessage(content=text)])
 
     def set_final_output(self, state: AgentState, text: str) -> AgentState:
+        """Record the agent's final text answer and flag the task complete."""
         self.log_event(Events.FINAL_OUTPUT_SET, length=len(text) if text else 0)
         return patch(
             state,
@@ -92,6 +101,7 @@ class BaseAgent(Observable):
         )
 
     def set_final_view(self, state: AgentState, text: str, view: dict) -> AgentState:
+        """Final answer plus a structured ``view`` dict for the frontend renderer."""
         self.log_event(
             Events.FINAL_OUTPUT_SET,
             length=len(text) if text else 0,
@@ -106,10 +116,12 @@ class BaseAgent(Observable):
         )
 
     def set_error(self, state: AgentState, msg: str) -> AgentState:
+        """Record a terminal error and flag the task complete (no final output)."""
         self.log("error", Events.AGENT_ERROR_SET, agent=type(self).__name__, error=msg)
         return patch(state, error=msg, is_complete=True)
 
     def _append_trace(self, state: AgentState, **kwargs) -> AgentState:
+        """Append a human-readable trace line to short-term memory and log it."""
         cls_name = type(self).__name__
         self.log_event(f"{cls_name}.trace", **{k: str(v) for k, v in kwargs.items()})
         entry = f"[{cls_name}] " + ", ".join(f"{k}={v}" for k, v in kwargs.items())
@@ -121,6 +133,7 @@ class BaseAgent(Observable):
     # ------------------------------------------------------------------
 
     def format_messages(self, state: AgentState) -> list[BaseMessage]:
+        """Trim the message window and prepend system prompt + known facts for the LLM."""
         raw: list[BaseMessage] = state.get("messages") or []
         trimmed = self.memory.trim(raw)
         self.log_event(
@@ -134,6 +147,7 @@ class BaseAgent(Observable):
         )
 
     def call_llm(self, messages: list[BaseMessage]) -> str:
+        """One-shot LLM call returning plain text (no tool loop)."""
         return self.llm_client.call(messages)
 
     # ------------------------------------------------------------------
@@ -141,6 +155,11 @@ class BaseAgent(Observable):
     # ------------------------------------------------------------------
 
     def _load_mcp_from_env(self) -> None:
+        """Connect to the env-configured MCP server(s) and bind the agent's tools.
+
+        Best-effort: failures are logged but never raised, so a missing/unreachable
+        MCP server degrades the agent to LLM-only rather than failing construction.
+        """
         # Empty list means the subclass explicitly opted out — skip the connection.
         if self.tool_names is not None and not self.tool_names:
             return
@@ -165,6 +184,7 @@ class BaseAgent(Observable):
             )
 
     async def _async_load_mcp_tools(self, config) -> None:
+        """Load the permitted MCP tools and bind them to the LLM client."""
         self.tools = await self.mcp_client.load_tools(config, self.tool_names)
         self.llm_client.bind_tools(self.tools)
 
@@ -186,6 +206,11 @@ class BaseAgent(Observable):
         return get_text(reply)
 
     def call_mcp_tool(self, name: str, args: dict) -> str:
+        """Invoke a single named MCP tool synchronously and return its text result.
+
+        Wraps the call in an mlflow TOOL span and unwraps the MCP content blocks
+        to a flat string. Raises ``LookupError`` if the tool was not loaded.
+        """
         tool = next((t for t in self.tools if t.name == name), None)
         if tool is None:
             raise LookupError(f"MCP tool '{name}' not available")
@@ -256,6 +281,11 @@ class BaseAgent(Observable):
     # ------------------------------------------------------------------
 
     def run(self, state: AgentState) -> AgentState:
+        """Default entry point: one LLM call when tool-less, else the tool loop.
+
+        Subclasses with custom behavior override this and typically call
+        ``answer_with`` / ``answer_with_tool`` instead.
+        """
         state = self._increment(state)
         messages = self.format_messages(state)
 
@@ -269,6 +299,11 @@ class BaseAgent(Observable):
         state: AgentState,
         messages: list[BaseMessage],
     ) -> AgentState:
+        """Iterate LLM↔tool calls until the model answers without a tool call.
+
+        Stops with an error once ``max_iterations`` is exhausted, guarding against
+        a model that keeps calling tools forever.
+        """
         max_iters = state.get("max_iterations") or 10
         total_tool_calls = 0
 
@@ -294,6 +329,11 @@ class BaseAgent(Observable):
         state: AgentState,
         iteration: int,
     ) -> tuple[list[BaseMessage], AgentState]:
+        """Execute one round of the model's tool calls and append the results.
+
+        Returns the extended message list (assistant turn + tool replies) and the
+        state with a trace entry, ready to feed back into the next LLM invocation.
+        """
         self._log_tool_calls(iteration, response.tool_calls)
         messages.append(response)
         tool_messages = asyncio.run(self.llm_client.execute_tool_calls(response.tool_calls))

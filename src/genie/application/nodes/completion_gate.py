@@ -1,3 +1,9 @@
+"""Completion Gate node: after execution, decide whether to synthesize or re-plan.
+
+Inspects the blackboard for missing or errored tasks and, within the replan
+budget, loops back to the Planner with re-plan context; otherwise proceeds to
+the Synthesizer (flagging a partial answer when some tasks failed).
+"""
 from __future__ import annotations
 
 from mlflow.entities import SpanType
@@ -16,6 +22,11 @@ class CompletionGate(Observable):
     _span_type: str = SpanType.CHAIN
 
     def run(self, state: AgentState) -> AgentState:
+        """Set ``next_action`` to replan or synthesize based on completeness and budget.
+
+        Re-plans only a non-empty plan with missing/errored tasks and replan
+        budget remaining; otherwise synthesizes, marking ``partial`` on any errors.
+        """
         plan_dict = state.get("plan") or {}
         plan = Plan(**plan_dict)
         blackboard = state.get("blackboard") or {}

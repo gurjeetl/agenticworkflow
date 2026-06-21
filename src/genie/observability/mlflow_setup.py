@@ -1,7 +1,14 @@
+"""One-time MLflow tracking + LangChain autolog setup.
+
+``init_mlflow`` is called at app startup. It degrades gracefully: when no
+``MLFLOW_TRACKING_URI`` is configured MLflow runs in no-op mode (a warning, not a
+crash), so the platform stays runnable without an MLflow server.
+"""
 import logging
-import os
 
 import mlflow
+
+from genie.platform.config import get_settings
 
 _initialized = False
 _log = logging.getLogger(__name__)
@@ -18,8 +25,8 @@ def init_mlflow(experiment_name: str | None = None) -> bool:
     if _initialized:
         return True
 
-    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
-    experiment = experiment_name or os.getenv("MLFLOW_EXPERIMENT_NAME", "base-agent-framework")
+    tracking_uri = get_settings().mlflow_tracking_uri
+    experiment = experiment_name or get_settings().mlflow_experiment_name
 
     if not tracking_uri:
         _log.warning(

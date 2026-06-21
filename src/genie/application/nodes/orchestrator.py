@@ -1,3 +1,8 @@
+"""Orchestrator node: turns the Planner's DAG into ordered dependency waves.
+
+Pure decomposition — runs no agents. Computes the execution waves the Executor
+consumes, keeping planning and execution observable as separate trace spans.
+"""
 from __future__ import annotations
 
 from mlflow.entities import SpanType
@@ -22,6 +27,7 @@ class Orchestrator(Observable):
     _span_type: str = SpanType.CHAIN
 
     def run(self, state: AgentState) -> AgentState:
+        """Compute wave ids from the plan; surface a cycle/invalid-DAG error to the Executor."""
         plan_dict = state.get("plan") or {}
         plan = Plan(**plan_dict)
 

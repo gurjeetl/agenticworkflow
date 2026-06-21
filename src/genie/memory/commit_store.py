@@ -1,12 +1,17 @@
+"""Sync (pymongo) MongoDB store for durable output commits and the audit log:
+each agent's persistable output in ``agent_commits`` and entity relationships in
+``entity_links``. Written by the Synthesizer node. MongoDB is required."""
+
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any
 
 from pymongo import ASCENDING, MongoClient
 from pymongo.errors import PyMongoError
+
+from genie.platform.config import get_settings
 
 _log = logging.getLogger(__name__)
 
@@ -26,8 +31,8 @@ class MongoCommitStore:
     """
 
     def __init__(self) -> None:
-        uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-        db_name = os.getenv("MONGODB_DB", "agent_memory")
+        uri = get_settings().mongodb_uri
+        db_name = get_settings().mongodb_db
         self._client = MongoClient(uri)
         db = self._client[db_name]
         self._commits = db["agent_commits"]
@@ -35,9 +40,12 @@ class MongoCommitStore:
 
     @property
     def enabled(self) -> bool:
+        """Always True — MongoDB is the required primary datastore."""
         return True
 
     def ensure_indexes(self) -> None:
+        """Create the run/thread lookup indexes and the unique entity-link index.
+        Best-effort: failures are logged and swallowed."""
         try:
             self._commits.create_index([("run_id", ASCENDING)])
             self._commits.create_index([("thread_id", ASCENDING)])
@@ -58,6 +66,8 @@ class MongoCommitStore:
         task_id: str,
         payload: dict[str, Any],
     ) -> None:
+        """Append one agent output to the ``agent_commits`` audit log, timestamped.
+        Best-effort: failures are logged and swallowed so synthesis never crashes."""
         try:
             self._commits.insert_one(
                 {
@@ -83,6 +93,8 @@ class MongoCommitStore:
         link_type: str,
         source_run_id: str,
     ) -> None:
+        """Record a directed relationship between two entities, idempotently (a
+        repeat (a, b, type) is a no-op). Best-effort: failures are logged."""
         try:
             # Upsert with $setOnInsert mirrors Postgres ON CONFLICT DO NOTHING.
             self._links.update_one(
@@ -102,6 +114,7 @@ class MongoCommitStore:
             _log.warning("commit_store.link_failed", extra={"attrs": {"error": str(e)}})
 
     def close(self) -> None:
+        """Close the underlying pymongo client (errors swallowed)."""
         try:
             self._client.close()
         except Exception:
@@ -112,6 +125,8 @@ _store: MongoCommitStore | None = None
 
 
 def get_commit_store() -> MongoCommitStore:
+    """Return the process-wide MongoCommitStore singleton, creating it on first use.
+    Also the shared sync MongoClient source reused by FactsStore."""
     global _store
     if _store is None:
         _store = MongoCommitStore()

@@ -1,12 +1,18 @@
+"""Planner node: turns the user request into a validated DAG of agent subtasks.
+
+The heaviest LLM call in the pipeline. Builds a registry-derived capability menu
+(plus semantic + structural memory recall and any re-plan context), prompts the
+model for a subtask graph, then validates each subtask against the live registry.
+"""
 from __future__ import annotations
 
 import json
-import os
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from genie.agents.base import BaseAgent, make_chat_model, patch
+from genie.platform.config import get_settings
 from genie.platform.events import Events
 from genie.llm.client import LLMClient
 from genie.memory.facts_store import get_facts_store
@@ -29,7 +35,7 @@ _PLAN_SCHEMA_HINT = (
 # session accumulates facts — so without a cap the planner prompt (and its latency)
 # drifts upward over a long conversation. 40 is generous (normal turns recall a
 # handful); it only clips pathological sessions. Override with PLANNER_MAX_FACTS.
-_MAX_FACTS = int(os.getenv("PLANNER_MAX_FACTS", "40"))
+_MAX_FACTS = get_settings().planner_max_facts
 
 
 class PlannerAgent(BaseAgent):
@@ -48,7 +54,7 @@ class PlannerAgent(BaseAgent):
         # The planner is the single heaviest LLM call (big agent-menu prompt + a
         # generated DAG). Point it at a faster model when configured; falls back to
         # OPENAI_MODEL. Mirrors ROUTER_MODEL.
-        planner_model = os.getenv("PLANNER_MODEL")
+        planner_model = get_settings().planner_model
         if planner_model:
             self.llm_client = LLMClient(make_chat_model(planner_model), observer=self)
 
@@ -88,6 +94,11 @@ class PlannerAgent(BaseAgent):
     def _build_system_prompt(
         self, state: AgentState, recall: list[dict] | None = None, facts: dict[str, str] | None = None
     ) -> str:
+        """Assemble the planning prompt: capability menu + recall/facts/re-plan blocks.
+
+        The menu is the cacheable part; recall, facts, and re-plan context are the
+        dynamic blocks appended per turn.
+        """
         menu = render_capability_menu(self._registry.list_active())
         recall_block = ""
         if recall:
@@ -172,6 +183,11 @@ class PlannerAgent(BaseAgent):
 
     # ------------------------------------------------------------------
     def _build_plan(self, parsed: dict) -> Plan:
+        """Validate the model's raw subtasks into a Plan against the live registry.
+
+        Drops subtasks naming an unknown agent or with invalid args (the run still
+        proceeds with whatever validated), normalizing ids and stamping versions.
+        """
         raw_subtasks: list[dict[str, Any]] = parsed.get("subtasks", []) or []
         metas = {m.agent_id: m for m in self._registry.list_active()}
         known_ids = set(metas)
@@ -204,7 +220,12 @@ class PlannerAgent(BaseAgent):
 
     # ------------------------------------------------------------------
     def run(self, state: AgentState) -> AgentState:
-        if os.getenv("DEBUG_BREAK"):
+        """Recall memory, prompt the LLM for a plan, validate it, and reset the blackboard.
+
+        Sets an error on registry/parse failure; an empty plan routes to the
+        Synthesizer for a clarification.
+        """
+        if get_settings().debug_break:
             breakpoint()  # opt-in: only fires when DEBUG_BREAK is set (see .vscode/launch.json)
         updated = self._increment(state)
         user_msg = state.get("user_input") or ""

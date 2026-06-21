@@ -10,13 +10,12 @@ Blocking reuses the chitchat fast-path mechanism: set ``final_output`` +
 """
 from __future__ import annotations
 
-import os
-
 from langchain_core.messages import AIMessage
 from mlflow.entities import SpanType
 
 from genie.agents.base import patch
 from genie.observability import Observable
+from genie.platform.config import get_settings
 from genie.security.llm_guard import get_llm_guard
 from genie.application.state import AgentState
 
@@ -34,7 +33,9 @@ class InputGuard(Observable):
     _span_type: str = SpanType.CHAIN
 
     def run(self, state: AgentState) -> AgentState:
-        if os.getenv("DEBUG_BREAK"):
+        """Scan ``user_input``; on a block short-circuit to a refusal, else continue
+        downstream with the sanitized (PII/secret-redacted) prompt."""
+        if get_settings().debug_break:
             breakpoint()  # opt-in: only fires when DEBUG_BREAK is set (see .vscode/launch.json)
         guard = get_llm_guard()
         text = state.get("user_input") or ""
@@ -73,7 +74,9 @@ class OutputGuard(Observable):
     _span_type: str = SpanType.CHAIN
 
     def run(self, state: AgentState) -> AgentState:
-        if os.getenv("DEBUG_BREAK"):
+        """Scan ``final_output``; replace it with a refusal on a block, else emit the
+        sanitized answer. No-op when there is no output to scan."""
+        if get_settings().debug_break:
             breakpoint()  # opt-in: only fires when DEBUG_BREAK is set (see .vscode/launch.json)
         out = state.get("final_output") or ""
         if not out:

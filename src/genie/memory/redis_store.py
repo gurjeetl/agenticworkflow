@@ -1,10 +1,15 @@
+"""Optional async Redis store: the hot blackboard mirror (working memory for an
+active run, TTL'd). No-ops when REDIS_URL is unset or redis is missing, so the
+framework runs without Redis."""
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import os
 from typing import Any
+
+from genie.platform.config import get_settings
 
 _log = logging.getLogger(__name__)
 
@@ -26,7 +31,7 @@ class RedisStore:
     """
 
     def __init__(self) -> None:
-        self._url = os.getenv("REDIS_URL")
+        self._url = get_settings().redis_url
         self._enabled = False
         self._clients: dict = {}  # event loop -> redis client
         if not self._url:
@@ -41,6 +46,7 @@ class RedisStore:
 
     @property
     def enabled(self) -> bool:
+        """True only when REDIS_URL is set and the redis package imported."""
         return self._enabled
 
     def _client(self):
@@ -66,6 +72,7 @@ class RedisStore:
         return client
 
     async def set_with_ttl(self, key: str, value: Any, ttl_seconds: int = _DEFAULT_TTL_SECONDS) -> None:
+        """Write a JSON-encoded value with a TTL. No-op/fail-open when disabled."""
         client = self._client()
         if not client:
             return
@@ -75,6 +82,7 @@ class RedisStore:
             _log.warning("redis.set_failed", extra={"attrs": {"key": key, "error": str(e)}})
 
     async def get(self, key: str) -> Any | None:
+        """Read and JSON-decode a value. Returns None when missing or disabled."""
         client = self._client()
         if not client:
             return None
@@ -108,6 +116,7 @@ class RedisStore:
         return entries
 
     async def delete_run(self, thread_id: str, run_id: str) -> None:
+        """Delete all blackboard mirror entries for one run. No-op when disabled."""
         client = self._client()
         if not client:
             return
@@ -119,6 +128,7 @@ class RedisStore:
             _log.warning("redis.delete_run_failed", extra={"attrs": {"pattern": pattern, "error": str(e)}})
 
     async def close(self) -> None:
+        """Close every per-loop client and clear the cache (errors swallowed)."""
         for client in list(self._clients.values()):
             try:
                 await client.close()
@@ -131,6 +141,7 @@ _store: RedisStore | None = None
 
 
 def get_redis_store() -> RedisStore:
+    """Return the process-wide RedisStore singleton, creating it on first use."""
     global _store
     if _store is None:
         _store = RedisStore()
