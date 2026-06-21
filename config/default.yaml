@@ -21,7 +21,7 @@ openai_temperature: "0"
 # ── Pipeline toggles ──────────────────────────────────────────────────────────
 # Set router_enabled: false to drop the Router triage node and send every prompt
 # straight to the Planner (no fast-path / chitchat shortcut).
-router_enabled: false
+router_enabled: true
 
 # ── MCP (the platform's tool-connection capability) ───────────────────────────
 # Single MCP server agents connect to. For multiple named servers, use the
