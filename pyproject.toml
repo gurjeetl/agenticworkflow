@@ -34,6 +34,8 @@ dependencies = [
     # --- Observability ---
     "mlflow>=2.16",
     "psycopg2-binary",
+    # --- RAG service boundary (shared wire contracts; editable local package) ---
+    "genie-rag-contracts",
 ]
 
 [project.optional-dependencies]
@@ -47,16 +49,29 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/genie", "src/applications"]
 
+[tool.hatch.metadata]
+# Allow the local path dependency on genie-rag-contracts (uv editable source below).
+allow-direct-references = true
+
+[tool.uv.sources]
+genie-rag-contracts = { path = "packages/genie-rag-contracts", editable = true }
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 
 [tool.importlinter]
-root_packages = ["genie", "applications"]
+root_packages = ["genie", "applications", "genie_rag_contracts"]
 
 [[tool.importlinter.contracts]]
 name = "Platform kernel must not depend on applications"
 type = "forbidden"
 source_modules = ["genie"]
 forbidden_modules = ["applications"]
+
+[[tool.importlinter.contracts]]
+name = "RAG contracts package must stay leaf-pure"
+type = "forbidden"
+source_modules = ["genie_rag_contracts"]
+forbidden_modules = ["genie", "applications"]

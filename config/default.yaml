@@ -63,6 +63,15 @@ registry_cache_ttl_s: 5.0
 registry_timeout_s: 3.0
 registry_serve_stale: true
 
+# ── RAG service (standalone retrieval microservice) ───────────────────────────
+# rag_backend selects how the platform retrieves: "local" (in-process BM25, the
+# default — nothing to run) or "remote" (call the standalone RAG service below).
+rag_backend: local
+rag_service_url: http://127.0.0.1:8003
+rag_service_port: 8003
+rag_service_timeout_s: 3.0
+# rag_service_auth_token: ""   # bearer token; blank = no auth (local dev)
+
 # ── Agent service harness ─────────────────────────────────────────────────────
 agent_host: 127.0.0.1
 # agent_port is normally set per-agent via the AGENT_PORT env var at launch

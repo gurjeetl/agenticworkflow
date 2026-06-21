@@ -150,8 +150,16 @@ class Settings(BaseSettings):
     torch_num_threads: int | None = None
     debug_break: str | None = None
 
-    # ── Misc ─────────────────────────────────────────────────────────────────
+    # ── RAG (retrieval) ──────────────────────────────────────────────────────
+    # Override the markdown corpus root indexed by genie.rag.index (defaults to
+    # the repo root when unset).
     rag_docs_dir: str | None = None
+    # Adapter selection: "local" (in-process BM25) or "remote" (standalone service).
+    rag_backend: str = "local"
+    rag_service_url: str = "http://127.0.0.1:8003"
+    rag_service_port: int = 8003
+    rag_service_timeout_s: float = 3.0
+    rag_service_auth_token: str | None = None
 
     @classmethod
     def from_yaml(cls, *paths: str | Path) -> "Settings":

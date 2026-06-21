@@ -64,3 +64,5 @@ models/guard_onnx/
 AGENTS.md
 codex.md
 .cursorrules
+CLAUDE.md
+.claude/
