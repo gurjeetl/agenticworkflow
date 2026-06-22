@@ -230,8 +230,8 @@ isolated `.venv`, and pins the right Python automatically.
   # curl -LsSf https://astral.sh/uv/install.sh | sh
   ```
   (Alternatives: `pipx install uv`, `winget install astral-sh.uv`, `brew install uv`.)
-- **Python 3.11+** — optional to install yourself; `uv` will fetch a compatible
-  interpreter on first sync if one isn't found (`uv python install 3.11`).
+- **Python 3.13** — optional to install yourself; `uv` will fetch the interpreter
+  pinned in `.python-version` on first sync if one isn't found (`uv python install 3.13`).
 - A running **MongoDB** (defaults to `mongodb://localhost:27017`)
 - An **OpenAI API key** (or any OpenAI-compatible endpoint via `OPENAI_BASE_URL`)
 - Optional: MLflow, Redis, Milvus

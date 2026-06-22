@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "genie-platform"
 version = "0.1.0"
 description = "A multi-agent platform: router -> synthesizer workflow plus capabilities (MCP, registry/discovery, A2A, memory, security guards, observability). Applications build agents by inheriting genie.agents.base.BaseAgent."
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
     # --- Web / orchestration ---
     "fastapi",
@@ -55,6 +55,10 @@ allow-direct-references = true
 
 [tool.uv.sources]
 genie-rag-contracts = { path = "packages/genie-rag-contracts", editable = true }
+# llm-guard 0.3.16 caps requires-python at <3.13. We install it from a fork that
+# raises the cap to <3.14 (one-line metadata change) so the platform runs on
+# Python 3.13. Drop this override once upstream lifts the cap.
+llm-guard = { git = "https://github.com/gauravsiet/llm-guard", tag = "v0.3.16-py313" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
