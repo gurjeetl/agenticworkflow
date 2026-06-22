@@ -72,11 +72,16 @@ def _make_lifespan(settings: Settings):
         redis = get_redis_store()
         _log.info("redis.ready", extra={"attrs": {"enabled": redis.enabled}})
 
-        # Mandatory content guard: constructing it here loads the local models, so a
-        # missing dependency or un-loadable model aborts startup (fail-closed) rather
-        # than letting the pipeline run unprotected.
-        get_llm_guard().warm()  # load AND warm the kernels so the first request pays neither
-        _log.info("llm_guard.ready")
+        # Content guard (ON by default; LLM_GUARD_ENABLED=0 to disable). When on,
+        # constructing it here loads the local models, so a missing dependency or
+        # un-loadable model aborts startup (fail-closed) rather than letting the
+        # pipeline run unprotected. When off, the graph omits the guard nodes too,
+        # so we skip the load entirely.
+        if settings.llm_guard_enabled:
+            get_llm_guard().warm()  # load AND warm the kernels so the first request pays neither
+            _log.info("llm_guard.ready")
+        else:
+            _log.warning("llm_guard.disabled", extra={"attrs": {"reason": "LLM_GUARD_ENABLED=0"}})
 
         # Warm the Router's local multi-intent classifier so the first request doesn't
         # pay the model load. Best-effort: it fails open if the model can't load.

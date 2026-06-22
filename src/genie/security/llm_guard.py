@@ -1,7 +1,10 @@
-"""Mandatory input/output content guard backed by the local ``llm-guard`` library.
+"""Input/output content guard backed by the local ``llm-guard`` library.
 
-Unlike the optional stores (Redis/Milvus), this is **not** optional and has no
-enable/disable flag. The library import and model construction happen eagerly in
+Enabled by default, controlled by a single master switch
+(``settings.llm_guard_enabled`` / ``LLM_GUARD_ENABLED``): when off, the graph
+omits both guard nodes and the models below are never loaded (see
+``genie.application.graph.build_graph``) — the pipeline then runs UNPROTECTED.
+When on, the library import and model construction happen eagerly in
 ``LLMGuard.__init__`` so that a missing dependency or un-loadable model surfaces
 as a hard startup failure (fail-closed) rather than silently running the pipeline
 unprotected.

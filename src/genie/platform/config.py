@@ -145,6 +145,12 @@ class Settings(BaseSettings):
     agent_invoke_token: str | None = None
 
     # ── Security guard ───────────────────────────────────────────────────────
+    # Master switch for the input/output content guard. When False the pipeline
+    # omits BOTH guard nodes and never loads the llm-guard models — so the app
+    # runs UNPROTECTED. Left ON by default (fail-safe). Set LLM_GUARD_ENABLED=0
+    # to disable (e.g. local dev, tests, or when content is guarded upstream).
+    # The flags below only take effect when the guard is enabled.
+    llm_guard_enabled: bool = True
     llm_guard_pii: bool = True
     llm_guard_parallel: bool = True
     llm_guard_use_onnx: bool = False

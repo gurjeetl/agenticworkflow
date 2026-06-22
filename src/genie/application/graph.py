@@ -80,20 +80,29 @@ def build_graph():
     The Router triage node is optional (``settings.router_enabled``): when disabled
     it is omitted from the graph and the input guard hands off directly to the
     Planner, so every request runs the full planning pipeline.
-    """
-    router_enabled = get_settings().router_enabled
 
-    input_guard = InputGuard()
+    The content guard is likewise optional (``settings.llm_guard_enabled``, ON by
+    default): when disabled BOTH guard nodes are omitted and the llm-guard models
+    are never loaded, so the prompt enters — and the answer leaves — the pipeline
+    unscanned.
+    """
+    settings = get_settings()
+    router_enabled = settings.router_enabled
+    guard_enabled = settings.llm_guard_enabled
+
     planner = PlannerAgent()
     orchestrator = Orchestrator()
     executor = Executor()
     gate = CompletionGate()
     synthesizer = SynthesizerAgent()
-    output_guard = OutputGuard()
 
     graph = StateGraph(AgentState)
 
-    graph.add_node("input_guard", input_guard.run)
+    if guard_enabled:
+        # Construct the guards only when enabled — they load the local llm-guard
+        # models, so skipping them avoids that cost entirely when disabled.
+        graph.add_node("input_guard", InputGuard().run)
+        graph.add_node("output_guard", OutputGuard().run)
     if router_enabled:
         # Construct the Router only when enabled — it loads a local intent
         # classifier, so skipping it avoids that cost entirely when disabled.
@@ -104,22 +113,27 @@ def build_graph():
     graph.add_node("executor", executor.run)
     graph.add_node("gate", gate.run)
     graph.add_node("synthesizer", synthesizer.run)
-    graph.add_node("output_guard", output_guard.run)
 
-    # Input guard scans the user prompt first. Blocked → straight to END with a
-    # safe refusal; otherwise the (PII-redacted) prompt flows to the Router (when
-    # enabled) — which fast-paths to the executor, sends chitchat to the
-    # synthesizer, or falls through to the full planner — or straight to the
-    # Planner when the Router is disabled.
-    graph.add_edge(START, "input_guard")
-    graph.add_conditional_edges(
-        "input_guard",
-        route_after_input_guard,
-        {
-            "continue": "router" if router_enabled else "planner",
-            "blocked": END,
-        },
-    )
+    # First pipeline node after the (optional) input guard: the Router when
+    # enabled — which fast-paths to the executor, sends chitchat to the
+    # synthesizer, or falls through to the full planner — else the Planner.
+    first_node = "router" if router_enabled else "planner"
+
+    # Input guard scans the user prompt first when enabled. Blocked → straight to
+    # END with a safe refusal; otherwise the (PII-redacted) prompt flows on. With
+    # the guard disabled the raw prompt enters the pipeline directly.
+    if guard_enabled:
+        graph.add_edge(START, "input_guard")
+        graph.add_conditional_edges(
+            "input_guard",
+            route_after_input_guard,
+            {
+                "continue": first_node,
+                "blocked": END,
+            },
+        )
+    else:
+        graph.add_edge(START, first_node)
     if router_enabled:
         graph.add_conditional_edges(
             "router",
@@ -142,9 +156,13 @@ def build_graph():
         },
     )
     # Every route converges at the synthesizer; the output guard scans the final
-    # answer before it reaches the user.
-    graph.add_edge("synthesizer", "output_guard")
-    graph.add_edge("output_guard", END)
+    # answer before it reaches the user when enabled, else the answer is returned
+    # straight from the synthesizer.
+    if guard_enabled:
+        graph.add_edge("synthesizer", "output_guard")
+        graph.add_edge("output_guard", END)
+    else:
+        graph.add_edge("synthesizer", END)
 
     memory = create_memory()
     return graph.compile(checkpointer=memory)
