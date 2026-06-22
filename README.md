@@ -276,6 +276,31 @@ Configuration is centralized in `genie.platform.config.Settings`
 come from `.env`; **nested** structures that env vars can't express — named MCP
 servers under `mcp_services`, LLM backends under `llm_services` — live in the YAML.
 
+### Pointing at a self-hosted LLM (`llm_services`)
+
+To run against an OpenAI-compatible self-hosted model instead of the flat
+`openai_*` config, declare it under `llm_services` in `config/default.yaml` (or
+`config/local.yaml`). `default` selects which model is used for **all** LLM calls
+(router, planner, synthesizer, agents); the `base_url` is derived as
+`http://{host}:{port}/{prompting_path}`:
+
+```yaml
+llm_services:
+  default: gpt_oss            # the model below is used for every LLM call
+  models:
+    gpt_oss:
+      host: "genieapps4.dev.oati.local"
+      port: 8033
+      model_name: "openai/gpt-oss-120b"
+      prompting_path: "v1"     # → base_url http://genieapps4.dev.oati.local:8033/v1
+      max_token_limit: 131072  # model context window (metadata; not max output tokens)
+      # api_key: "EMPTY"       # open endpoints need no key — a placeholder is applied
+```
+
+When a named backend is active, `openai_model` becomes an inert fallback (used only
+if `llm_services.default` is unset). Embeddings still use the flat `openai_*` config,
+so set `OPENAI_API_KEY` if semantic long-term memory (Milvus) is enabled.
+
 Key environment variables:
 
 | Variable | Purpose |

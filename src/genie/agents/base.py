@@ -33,14 +33,30 @@ def patch(state: AgentState, **changes) -> AgentState:
 def make_chat_model(model: str | None = None) -> ChatOpenAI:
     """Build a ChatOpenAI from the central Settings, with an optional model override.
 
-    Honors OPENAI_MODEL / OPENAI_API_KEY / OPENAI_BASE_URL, plus an optional
-    OPENAI_TEMPERATURE. Set OPENAI_TEMPERATURE=0 to make the routing / planning /
-    synthesis calls deterministic — that cuts run-to-run path variance (e.g. a
-    prompt fast-pathing one run and full-planning the next) and the spurious
-    re-plans it triggers. When unset, the provider default (~1.0) is used.
+    When a named LLM service is selected (``llm_services.default`` in YAML), the
+    client points at that self-hosted endpoint; ``model`` then overrides only the
+    model name while reusing the same endpoint. Otherwise it falls back to the flat
+    OPENAI_MODEL / OPENAI_API_KEY / OPENAI_BASE_URL config.
+
+    Set OPENAI_TEMPERATURE=0 to make the routing / planning / synthesis calls
+    deterministic — that cuts run-to-run path variance (e.g. a prompt fast-pathing
+    one run and full-planning the next) and the spurious re-plans it triggers. When
+    unset, the provider default (~1.0) is used.
     """
     settings = get_settings()
-    kwargs: dict = {}
+    svc = settings.llm_services.active()
+    if svc is not None:
+        temp = svc.temperature
+        if temp is None and settings.openai_temperature not in (None, ""):
+            temp = float(settings.openai_temperature)
+        kwargs: dict = {"temperature": temp} if temp is not None else {}
+        return ChatOpenAI(
+            model=model or svc.model_name,
+            api_key=svc.api_key or "EMPTY",   # open endpoint → non-empty placeholder
+            base_url=svc.base_url,            # e.g. http://genieapps4.dev.oati.local:8033/v1
+            **kwargs,
+        )
+    kwargs = {}
     if settings.openai_temperature not in (None, ""):
         kwargs["temperature"] = float(settings.openai_temperature)
     return ChatOpenAI(

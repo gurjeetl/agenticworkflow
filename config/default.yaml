@@ -9,6 +9,8 @@
 # Field reference: genie.platform.config.Settings.
 
 # ── LLM (OpenAI-compatible) ───────────────────────────────────────────────────
+# NOTE: a named backend is active below (llm_services.default), so openai_model is
+# the inert fallback — used only if llm_services.default is unset/cleared.
 openai_model: gpt-4o-mini
 # Deterministic routing/planning/synthesis → less run-to-run variance, fewer
 # spurious re-plans. Quoted so it stays a string ("" / unset = provider default).
@@ -37,8 +39,19 @@ mcp_services: {}
 #     url: http://127.0.0.1:8001/sse
 #     transport: sse
 
-# Named LLM backends (for OpenAI-compatible self-hosted models).
-llm_services: {}
+# Named LLM backends (for OpenAI-compatible self-hosted models). `default` selects
+# which model below is used for ALL LLM calls (router/planner/synthesizer/agents);
+# base_url is derived as http://{host}:{port}/{prompting_path}.
+llm_services:
+  default: gpt_oss
+  models:
+    gpt_oss:
+      host: "genieapps4.dev.oati.local"
+      port: 8033
+      model_name: "openai/gpt-oss-120b"
+      prompting_path: "v1"
+      max_token_limit: 131072
+      # api_key: "EMPTY"    # open endpoint; a placeholder is applied automatically
 
 # ── Persistence ───────────────────────────────────────────────────────────────
 mongodb_uri: mongodb://localhost:27017

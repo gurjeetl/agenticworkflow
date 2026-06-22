@@ -41,12 +41,36 @@ class MCPServiceConfig(BaseModel):
 
 
 class LLMModelConfig(BaseModel):
-    """Configuration for one named LLM backend (from YAML llm_services)."""
+    """One named OpenAI-compatible LLM backend (from YAML llm_services.models).
 
-    model: str = "gpt-4o-mini"
-    base_url: str | None = None
-    api_key: str | None = None
+    Describes a self-hosted endpoint by host/port/prompting_path; ``base_url``
+    derives the URL ChatOpenAI needs (e.g. ``http://host:8033/v1``).
+    """
+
+    host: str
+    port: int
+    model_name: str
+    prompting_path: str = "v1"          # URL path segment → base_url ".../{prompting_path}"
+    max_token_limit: int | None = None  # model context window (metadata; not max output tokens)
+    api_key: str | None = None          # None/blank → "EMPTY" at the use site (open endpoints)
     temperature: float | None = None
+
+    @property
+    def base_url(self) -> str:
+        path = self.prompting_path.strip("/")
+        root = f"http://{self.host}:{self.port}"
+        return f"{root}/{path}" if path else root
+
+
+class LLMServicesConfig(BaseModel):
+    """The ``llm_services`` block: named models plus the active default."""
+
+    models: dict[str, LLMModelConfig] = Field(default_factory=dict)
+    default: str | None = None
+
+    def active(self) -> LLMModelConfig | None:
+        """Return the model selected by ``default``, or None when unset/missing."""
+        return self.models.get(self.default) if self.default else None
 
 
 # ── Top-level Settings ────────────────────────────────────────────────────────
@@ -91,8 +115,8 @@ class Settings(BaseSettings):
     # Named MCP servers defined in YAML (key = logical service name).
     mcp_services: dict[str, MCPServiceConfig] = Field(default_factory=dict)
 
-    # Named LLM backends defined in YAML (key = logical name).
-    llm_services: dict[str, LLMModelConfig] = Field(default_factory=dict)
+    # Named LLM backends defined in YAML (models + active default).
+    llm_services: LLMServicesConfig = Field(default_factory=LLMServicesConfig)
 
     # ── Persistence ──────────────────────────────────────────────────────────
     mongodb_uri: str = "mongodb://localhost:27017"
@@ -198,9 +222,7 @@ class Settings(BaseSettings):
                 name: MCPServiceConfig.model_validate(svc) for name, svc in mcp_raw.items()
             }
         if llm_raw and isinstance(llm_raw, dict):
-            updates["llm_services"] = {
-                name: LLMModelConfig.model_validate(svc) for name, svc in llm_raw.items()
-            }
+            updates["llm_services"] = LLMServicesConfig.model_validate(llm_raw)
         return instance.model_copy(update=updates)
 
 
