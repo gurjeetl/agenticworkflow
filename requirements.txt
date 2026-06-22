@@ -26,9 +26,10 @@ pymilvus[milvus_lite]>=2.4
 # The default PyTorch CPU backend benchmarked faster than ONNX here, so ONNX is an
 # opt-in (LLM_GUARD_USE_ONNX=1) — only worthwhile with quantized models. To use it,
 # install the extra: pip install "llm-guard[onnxruntime]".
-# Installed from a fork that raises requires-python to <3.14 so it installs on
-# Python 3.13 (upstream 0.3.16 caps at <3.13). Mirrors pyproject.toml [tool.uv.sources].
-llm-guard @ git+https://github.com/gauravsiet/llm-guard@v0.3.16-py313
+# Installed from the vendored source in vendor/llm-guard/, whose requires-python
+# cap is raised to <3.14 so it installs on Python 3.13 (upstream 0.3.16 caps at
+# <3.13). Self-contained — no external fork. Mirrors pyproject.toml [tool.uv.sources].
+./vendor/llm-guard
 
 # --- Router intent classifier (local, CPU) ---
 # Small sentence-transformers model (all-MiniLM-L6-v2, ~80MB, Apache-2.0) for

@@ -55,10 +55,12 @@ allow-direct-references = true
 
 [tool.uv.sources]
 genie-rag-contracts = { path = "packages/genie-rag-contracts", editable = true }
-# llm-guard 0.3.16 caps requires-python at <3.13. We install it from a fork that
-# raises the cap to <3.14 (one-line metadata change) so the platform runs on
-# Python 3.13. Drop this override once upstream lifts the cap.
-llm-guard = { git = "https://github.com/gauravsiet/llm-guard", tag = "v0.3.16-py313" }
+# llm-guard 0.3.16 caps requires-python at <3.13. We vendor its source under
+# vendor/llm-guard/ with that cap raised to <3.14 (the only change) so the
+# platform runs on Python 3.13. Self-contained — no external fork. Models are
+# still fetched from HuggingFace at runtime, not vendored. Drop this override
+# (and the vendor dir) once upstream lifts the cap.
+llm-guard = { path = "vendor/llm-guard" }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
