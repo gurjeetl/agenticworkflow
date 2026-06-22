@@ -84,11 +84,13 @@ def _make_lifespan(settings: Settings):
             _log.warning("llm_guard.disabled", extra={"attrs": {"reason": "LLM_GUARD_ENABLED=0"}})
 
         # Warm the Router's local multi-intent classifier so the first request doesn't
-        # pay the model load. Best-effort: it fails open if the model can't load.
+        # pay the model load. Best-effort: it fails open if the model can't load. With
+        # the "llm" intent backend this is a no-op (no local model / no HuggingFace).
         from genie.application.nodes._router_intent import get_intent_classifier
 
-        get_intent_classifier().warm()
-        _log.info("router_intent_classifier.ready")
+        classifier = get_intent_classifier()
+        classifier.warm()
+        _log.info("router_intent_classifier.ready", extra={"attrs": {"backend": classifier.backend}})
 
         yield
 

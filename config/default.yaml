@@ -93,6 +93,11 @@ agent_host: 127.0.0.1
 # agent_advertise_port: 8010
 
 # ── Security guard (llm-guard) ────────────────────────────────────────────────
+# Master switch. true (default): the guard runs and its local models load at
+# startup (fail-closed). false: BOTH guard nodes are omitted from the graph and
+# the llm-guard models are never loaded — the pipeline runs UNPROTECTED. The
+# tuning flags below only apply when the guard is enabled.
+llm_guard_enabled: false
 # No personal data in this app → PII/secret NER scanners off (faster, less RAM).
 llm_guard_pii: false
 llm_guard_parallel: true
@@ -103,7 +108,15 @@ llm_guard_fail_open: false
 
 # ── Router triage tuning ──────────────────────────────────────────────────────
 router_min_confidence: 0.7
-router_intent_classifier: true
+# Multi-intent detection backend:
+#   embedding — local sentence-transformers model (router_intent_model); the first
+#               load downloads from HuggingFace, so it needs HF reachable or the
+#               model pre-cached.
+#   llm       — no local model: the Router's own LLM route call classifies intent
+#               (multi-intent -> plan). Use where HuggingFace is unreachable. Set
+#               here because our deployment boxes have no HuggingFace access.
+router_intent_backend: llm
+# Used only by the "embedding" backend:
 router_intent_model: sentence-transformers/all-MiniLM-L6-v2
 router_intent_threshold: 0.30
 router_intent_min_agents: 2

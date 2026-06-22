@@ -115,6 +115,8 @@ class RouterAgent(BaseAgent):
         #   - regex: explicit additive phrasing ("...outages. ALSO the weather")
         #   - classifier: prompt activates >= 2 distinct agents by embedding similarity
         #     (catches implicit "weather in tokyo and the top outages"). Fails open.
+        # The classifier is a no-op under the "llm" intent backend — multi-intent is
+        # then left to the router's own LLM route call below (it picks "plan").
         if user_msg:
             reason = self._multi_intent_reason(user_msg, metas)
             if reason:
@@ -143,7 +145,9 @@ class RouterAgent(BaseAgent):
         """Return a route reason if the prompt is clearly multi-intent, else None.
 
         Regex first (free); then the local embedding classifier (counts activated
-        agents). Either signal is sufficient. The classifier fails open (count 0).
+        agents). Either signal is sufficient. The classifier fails open (count 0),
+        and returns 0 entirely under the "llm" intent backend — leaving multi-intent
+        detection to the router's LLM route call.
         """
         if self._multi_intent_re.search(user_msg):
             return "multi_intent_regex"

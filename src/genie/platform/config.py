@@ -165,6 +165,20 @@ class Settings(BaseSettings):
     # (no fast-path / chitchat shortcut). Set ROUTER_ENABLED=0 to disable.
     router_enabled: bool = False
     router_min_confidence: float = 0.7
+    # Backend for the Router's multi-intent detection (which routes 2+-agent
+    # prompts straight to the Planner):
+    #   "embedding" — local sentence-transformers model (router_intent_model).
+    #                 Fast and offline ONCE cached, but the first load downloads
+    #                 from HuggingFace. Use where the model is reachable/pre-cached.
+    #   "llm"       — no local model: the Router's own LLM route call classifies
+    #                 intent (a multi-intent prompt is routed to "plan"). Use where
+    #                 HuggingFace is unreachable — adds NO extra LLM call, it just
+    #                 relies on the route decision the Router already makes.
+    # Set ROUTER_INTENT_BACKEND=llm to avoid loading the local model entirely.
+    router_intent_backend: str = "embedding"
+    # Deprecated alias kept for back-compat: router_intent_classifier=False forces
+    # the "llm" backend (the old "regex-only, let the LLM decide" behavior). Prefer
+    # router_intent_backend. True leaves router_intent_backend in control.
     router_intent_classifier: bool = True
     router_intent_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     router_intent_threshold: float = 0.30

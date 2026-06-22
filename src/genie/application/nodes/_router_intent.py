@@ -15,6 +15,13 @@ min_agents`` activated ⇒ multi-intent.
 Fully local — no network, no big LLM. **Fails open**: any import/load/encode error
 returns count 0, so the Router behaves exactly as before (its LLM call still runs).
 Agent embeddings are cached and only recomputed when the active agent set changes.
+
+This embedding path is active only when ``router_intent_backend == "embedding"``
+(the default). With the ``"llm"`` backend the local model is never loaded — useful
+where HuggingFace is unreachable — and multi-intent detection is left to the
+Router's own LLM route call (a multi-intent prompt is routed to "plan"). In that
+mode ``count_agents`` returns 0 / ``is_multi_intent`` returns False, so the Router
+skips the pre-LLM shortcut and falls through to its normal LLM-based decision.
 """
 from __future__ import annotations
 
@@ -34,18 +41,41 @@ class IntentClassifier:
     """Counts distinct agents a prompt activates, to flag multi-intent prompts."""
 
     def __init__(self) -> None:
-        self._model_name = get_settings().router_intent_model
-        self._threshold = get_settings().router_intent_threshold
-        self._min_agents = get_settings().router_intent_min_agents
-        self._enabled = get_settings().router_intent_classifier
+        s = get_settings()
+        self._model_name = s.router_intent_model
+        self._threshold = s.router_intent_threshold
+        self._min_agents = s.router_intent_min_agents
+        self._backend = self._resolve_backend(s)
         self._model = None
         self._agent_vecs: dict[str, object] = {}  # agent_id -> normalized embedding
         self._agent_sig: tuple | None = None  # signature of the cached agent set
 
+    @staticmethod
+    def _resolve_backend(s) -> str:
+        """Pick the active intent backend: "embedding" or "llm".
+
+        ``router_intent_backend`` is authoritative; the legacy
+        ``router_intent_classifier=False`` flag forces "llm" for back-compat. An
+        unrecognized backend value falls back to "embedding".
+        """
+        if not s.router_intent_classifier:
+            return "llm"
+        backend = (s.router_intent_backend or "embedding").strip().lower()
+        return backend if backend in ("embedding", "llm") else "embedding"
+
+    @property
+    def backend(self) -> str:
+        """The active intent-classification backend ("embedding" | "llm")."""
+        return self._backend
+
     @property
     def enabled(self) -> bool:
-        """True when the local intent classifier is active (model loadable)."""
-        return self._enabled
+        """True when the local embedding classifier is active (model loaded/used).
+
+        Only the "embedding" backend loads the local model; the "llm" backend
+        leaves multi-intent detection to the Router's LLM route call.
+        """
+        return self._backend == "embedding"
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -79,7 +109,7 @@ class IntentClassifier:
 
         Returns 0 on any failure (fail-open) so the caller keeps prior behavior.
         """
-        if not self._enabled or not text or not metas:
+        if not self.enabled or not text or not metas:
             return 0
         try:
             model = self._ensure_model()
@@ -105,8 +135,12 @@ class IntentClassifier:
         return self.count_agents(text, metas) >= self._min_agents
 
     def warm(self) -> None:
-        """Eagerly load the model (call at startup to avoid a cold first request)."""
-        if self._enabled:
+        """Eagerly load the model (call at startup to avoid a cold first request).
+
+        No-op unless the "embedding" backend is active, so the "llm" backend never
+        touches the local model or HuggingFace.
+        """
+        if self.enabled:
             try:
                 self._ensure_model()
             except Exception as e:
