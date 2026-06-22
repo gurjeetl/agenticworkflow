@@ -55,6 +55,10 @@ docs/
 logs_*.txt
 milvus_store.db/
 
+# Process logs + PID files written by scripts/run-prod.ps1
+logs/
+run/
+
 # Locally-built guard model artifacts + env snapshot (large; rebuild via
 # scripts/quantize_guard_models.py — not shipped)
 models/guard_onnx/
