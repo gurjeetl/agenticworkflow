@@ -215,24 +215,53 @@ genie-platform/
 
 ## Setup
 
+This project uses **[uv](https://docs.astral.sh/uv/)** — a fast Python package &
+project manager — for dependency management, the virtual environment, and running
+commands. `uv` reads `pyproject.toml` (and the resolved `uv.lock`), creates an
+isolated `.venv`, and pins the right Python automatically.
+
 ### Prerequisites
 
-- Python 3.11+
-- A running MongoDB (defaults to `mongodb://localhost:27017`)
-- An OpenAI API key (or any OpenAI-compatible endpoint via `OPENAI_BASE_URL`)
+- **uv** — install it first (it also manages the Python toolchain for you):
+  ```powershell
+  # Windows (PowerShell)
+  powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"
+  # macOS / Linux
+  # curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
+  (Alternatives: `pipx install uv`, `winget install astral-sh.uv`, `brew install uv`.)
+- **Python 3.11+** — optional to install yourself; `uv` will fetch a compatible
+  interpreter on first sync if one isn't found (`uv python install 3.11`).
+- A running **MongoDB** (defaults to `mongodb://localhost:27017`)
+- An **OpenAI API key** (or any OpenAI-compatible endpoint via `OPENAI_BASE_URL`)
 - Optional: MLflow, Redis, Milvus
 
 ### Install
 
+From the repo root:
+
 ```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -e .            # installs the genie + applications packages from src/
+uv sync                     # create .venv + install genie, applications, and the
+                            # editable genie-rag-contracts package from src/
 ```
 
-`pip install -e .` puts `genie` and `applications` on the path. The standalone
-`services.*` and the `app` entry resolve from the repo root (or set
-`PYTHONPATH=src`).
+`uv sync` resolves and installs everything declared in `pyproject.toml`
+(including the local `packages/genie-rag-contracts` editable source wired up under
+`[tool.uv.sources]`), creating a project `.venv` in one step — no manual
+`venv`/activation needed. To include the test/lint toolchain:
+
+```powershell
+uv sync --extra dev         # adds pytest, pytest-asyncio, ruff, import-linter
+```
+
+Run any command inside the managed environment by prefixing it with `uv run`
+(no activation required) — e.g. `uv run python -m ...`, `uv run uvicorn ...`,
+`uv run pytest`. `uv` ensures the env is up to date before each run. If you prefer
+a classic activated shell, `.venv\Scripts\Activate.ps1` (PowerShell) or
+`source .venv/bin/activate` (bash) still works.
+
+This puts `genie` and `applications` on the path. The standalone `services.*` and
+the `app` entry resolve from the repo root (or set `PYTHONPATH=src`).
 
 ### Configure
 
@@ -272,12 +301,12 @@ The system is multi-process; each piece runs on its own port:
 
 | Service | Port | Start command |
 | --- | --- | --- |
-| MCP tool server | 8001 | `python -m services.mcp.weather_server` |
-| Registry / discovery | 8002 | `python -m services.registry.server` |
-| Weather agent | 8010 | `$env:AGENT_PORT="8010"; python -m applications.demo.weather.agent` |
-| Outage agent | 8011 | `$env:AGENT_PORT="8011"; python -m applications.demo.outage.agent` |
-| RAG agent | 8012 | `$env:AGENT_PORT="8012"; python -m applications.demo.rag.agent` |
-| Gateway (FastAPI) | 8000 | `uvicorn app:app --host 0.0.0.0 --port 8000` |
+| MCP tool server | 8001 | `uv run python -m services.mcp.weather_server` |
+| Registry / discovery | 8002 | `uv run python -m services.registry.server` |
+| Weather agent | 8010 | `$env:AGENT_PORT="8010"; uv run python -m applications.demo.weather.agent` |
+| Outage agent | 8011 | `$env:AGENT_PORT="8011"; uv run python -m applications.demo.outage.agent` |
+| RAG agent | 8012 | `$env:AGENT_PORT="8012"; uv run python -m applications.demo.rag.agent` |
+| Gateway (FastAPI) | 8000 | `uv run uvicorn app:app --host 0.0.0.0 --port 8000` |
 
 The easiest way is the launcher, which opens each in its own window in the right
 order (registry before agents register; agents before the gateway queries them):
@@ -340,7 +369,7 @@ server to persist traces, or use a local `sqlite:///mlflow_local.db` store.
 ## Tests & boundaries
 
 ```powershell
-pip install -e ".[dev]"     # pytest, ruff, import-linter
-pytest                      # unit / integration / e2e
-lint-imports                # enforces: genie.* must not import applications.*
+uv sync --extra dev         # pytest, ruff, import-linter
+uv run pytest               # unit / integration / e2e
+uv run lint-imports         # enforces: genie.* must not import applications.*
 ```
