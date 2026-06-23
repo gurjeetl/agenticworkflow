@@ -32,6 +32,7 @@ class MongoMemoryStore:
     structured facts owned by the sync FactsStore. MongoDB is required."""
 
     def __init__(self):
+        """Open the async motor client and bind the short-term, long-term, conversation, and facts collections."""
         uri = get_settings().mongodb_uri
         db_name = get_settings().mongodb_db
         self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)

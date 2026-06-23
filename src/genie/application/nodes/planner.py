@@ -47,6 +47,7 @@ class PlannerAgent(BaseAgent):
     tool_names: list[str] = []
 
     def __init__(self) -> None:
+        """Set up the base agent and Registry client; the agent-menu system prompt is built per-run."""
         super().__init__()
         # System prompt is built per-run so newly-discovered agents appear automatically.
         self.system_prompt = ""

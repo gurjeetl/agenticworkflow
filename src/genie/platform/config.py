@@ -57,6 +57,7 @@ class LLMModelConfig(BaseModel):
 
     @property
     def base_url(self) -> str:
+        """Full prompting endpoint URL (``http://host:port`` plus ``prompting_path`` when set)."""
         path = self.prompting_path.strip("/")
         root = f"http://{self.host}:{self.port}"
         return f"{root}/{path}" if path else root
@@ -76,10 +77,11 @@ class LLMServicesConfig(BaseModel):
 # ── Top-level Settings ────────────────────────────────────────────────────────
 
 class Settings(BaseSettings):
-    """The platform's single configuration object (env > YAML > field defaults).
+    """The platform's single configuration object (YAML > env > field defaults).
 
-    Fields bind to the existing unprefixed env-var names so a module reading
-    ``Settings`` and one still calling ``os.getenv`` observe identical values.
+    Fields bind to the existing unprefixed env-var names, so an environment
+    variable fills any key not set in YAML. YAML is authoritative when both set a
+    key — see :meth:`from_yaml` / :func:`get_settings` for the full layering.
     """
 
     # env_prefix="" + case_sensitive=False → field `openai_model` binds to env

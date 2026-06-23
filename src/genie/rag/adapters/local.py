@@ -47,6 +47,7 @@ class LocalRAGAdapter:
     """
 
     def __init__(self) -> None:
+        """Start with an empty chunk corpus and a lazily-built (None) BM25 index."""
         # One entry per chunk: {document_id, chunk_id, content, metadata}.
         self._chunks: list[dict[str, Any]] = []
         self._by_chunk: dict[str, dict[str, Any]] = {}

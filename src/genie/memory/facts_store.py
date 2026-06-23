@@ -40,6 +40,7 @@ class FactsStore:
     """
 
     def __init__(self) -> None:
+        """Bind the ``agent_facts`` collection, reusing the commit store's pymongo client."""
         # Reuse the commit store's pymongo client (one pool for the sync side).
         client = get_commit_store()._client
         db_name = get_settings().mongodb_db

@@ -32,6 +32,7 @@ class RemoteRAGAdapter:
         max_retries: int = 3,
         api_key: str | None = None,
     ) -> None:
+        """Configure the RAG service base URL, request timeout, retry count, and optional API key."""
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._max_retries = max_retries

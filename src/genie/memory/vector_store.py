@@ -41,6 +41,7 @@ class MilvusVectorStore:
     """
 
     def __init__(self) -> None:
+        """Resolve the Milvus URI (remote http(s) or local Lite file), guarding the import-time env quirk."""
         # MILVUS_URI may be a remote http(s) endpoint OR a local Milvus Lite file
         # (e.g. ./milvus_local.db — no server/Docker needed). MILVUS_DB_PATH is an
         # explicit alias for the Lite-file case.

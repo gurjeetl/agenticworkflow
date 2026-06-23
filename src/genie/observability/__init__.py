@@ -1,3 +1,4 @@
+"""Observability surface: the MLflow tracing mixin plus logging/MLflow setup helpers."""
 from genie.observability.observable import Observable
 from genie.observability.mlflow_setup import init_mlflow
 from genie.observability.logging import configure_logging, get_logger

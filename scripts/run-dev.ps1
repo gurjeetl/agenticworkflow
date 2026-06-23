@@ -9,8 +9,8 @@
 
       * Gateway runs under Uvicorn with --reload (hot-reload on code changes).
       * Everything binds to 127.0.0.1 (loopback only — not exposed off-box).
-      * A self-contained MLflow server (SQLite backend) is started locally, so
-        tracing works with no external Postgres.
+      * A local MLflow server backed by PostgreSQL is started (DSN read from
+        config/local.yaml: mlflow_backend_store_uri), matching run-all.ps1.
       * Optional Redis (blackboard hot mirror) is auto-started if a portable
         build is present; the app degrades gracefully when it is absent.
 
@@ -63,6 +63,26 @@ function Start-Svc($title, $cmd, $svcEnv = @{}) {
 }
 
 # --------------------------------------------------------------------------
+# Read a flat scalar key from the YAML config (local.yaml wins over default.yaml),
+# falling back to the legacy UPPER_SNAKE name in .env for back-compat.
+# --------------------------------------------------------------------------
+function Get-ConfigValue($key) {
+    foreach ($f in @((Join-Path $root "config\local.yaml"), (Join-Path $root "config\default.yaml"))) {
+        if (Test-Path $f) {
+            $line = Get-Content $f | Where-Object { $_ -match "^\s*$key\s*:" -and $_ -notmatch '^\s*#' } | Select-Object -First 1
+            if ($line) { return ($line -replace "^\s*$key\s*:\s*", '').Trim().Trim('"').Trim("'") }
+        }
+    }
+    $envFile = Join-Path $root ".env"
+    if (Test-Path $envFile) {
+        $envKey = $key.ToUpper()
+        $line = Get-Content $envFile | Where-Object { $_ -match "^\s*$envKey\s*=" } | Select-Object -First 1
+        if ($line) { return ($line -replace "^\s*$envKey\s*=\s*", '').Trim() }
+    }
+    return $null
+}
+
+# --------------------------------------------------------------------------
 # Idempotent re-run: close service windows left over from a previous launch.
 # Our windows are started with -NoExit (logs stay readable), so they survive a
 # plain process kill. We match the launch command line, which carries a unique
@@ -86,11 +106,22 @@ if (Test-Path $redisExe) {
 } else { Write-Host "Redis not found - blackboard mirror disabled (this is fine for dev)" }
 
 # --------------------------------------------------------------------------
-# MLflow tracking server with a self-contained SQLite backend — no Postgres
-# needed for dev. Must come up before the app/agents so their spans land
-# somewhere. Artifacts go to ./mlartifacts.
+# MLflow tracking server backed by PostgreSQL (DSN from config/local.yaml:
+# mlflow_backend_store_uri). Required — no SQLite fallback, matching run-all.ps1.
+# Must come up before the app/agents so their spans land somewhere. Artifacts
+# go to ./mlartifacts.
 # --------------------------------------------------------------------------
-Start-Svc "MLflow :5000" "python -m mlflow server --backend-store-uri sqlite:///mlflow_dev.db --default-artifact-root ./mlartifacts --host 127.0.0.1 --port 5000"
+$mlflowBackend = Get-ConfigValue 'mlflow_backend_store_uri'
+if (-not $mlflowBackend) {
+    Write-Host "ERROR: mlflow_backend_store_uri is not set in config/local.yaml (PostgreSQL DSN required)." -ForegroundColor Red
+    Write-Host "       Copy config/local.yaml.example to config/local.yaml and fill it in." -ForegroundColor Red
+    exit 1
+}
+# Host/port come from mlflow_tracking_uri (the same URL the app/agents send spans
+# to), so the server binds exactly where clients expect it. Defaults to :5000.
+$mlflowUri = Get-ConfigValue 'mlflow_tracking_uri'; if (-not $mlflowUri) { $mlflowUri = "http://127.0.0.1:5000" }
+$mlflowParsed = [System.Uri]$mlflowUri
+Start-Svc "MLflow :$($mlflowParsed.Port)" "python -m mlflow server --backend-store-uri $mlflowBackend --default-artifact-root ./mlartifacts --host $($mlflowParsed.Host) --port $($mlflowParsed.Port)"
 Start-Sleep -Seconds 5
 
 # Backend services (MCP tools, registry, RAG retrieval).
@@ -114,6 +145,6 @@ Write-Host "Dev stack launched (each service has its own window)." -ForegroundCo
 Write-Host "  Chat UI  : http://127.0.0.1:8000"
 Write-Host "  Trace UI : http://127.0.0.1:8000/trace.html"
 Write-Host "  Registry : http://127.0.0.1:8002/agents"
-Write-Host "  MLflow   : http://127.0.0.1:5000"
+Write-Host "  MLflow   : $mlflowUri"
 Write-Host ""
 Write-Host "Re-run this script any time; it closes the old service windows first."

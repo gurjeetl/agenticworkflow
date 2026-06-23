@@ -24,6 +24,7 @@ COLLECTION = "agent_registry"
 
 
 def _now() -> datetime:
+    """Current UTC time — module helper for timestamps and TTL math."""
     return datetime.now(timezone.utc)
 
 
@@ -35,6 +36,7 @@ class RegistryStore:
     """
 
     def __init__(self) -> None:
+        """Open the Mongo client, bind the registry collection, and cache the configured TTL."""
         _s = get_settings()
         uri = _s.mongodb_uri
         db_name = _s.mongodb_db

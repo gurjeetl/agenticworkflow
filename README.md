@@ -230,11 +230,15 @@ isolated `.venv`, and pins the right Python automatically.
   # curl -LsSf https://astral.sh/uv/install.sh | sh
   ```
   (Alternatives: `pipx install uv`, `winget install astral-sh.uv`, `brew install uv`.)
-- **Python 3.13** — optional to install yourself; `uv` will fetch the interpreter
-  pinned in `.python-version` on first sync if one isn't found (`uv python install 3.13`).
+- **Python 3.11+** — optional to install yourself; `uv` will fetch a compatible
+  interpreter on first sync if one isn't found (`uv python install 3.11`).
 - A running **MongoDB** (defaults to `mongodb://localhost:27017`)
 - An **OpenAI API key** (or any OpenAI-compatible endpoint via `OPENAI_BASE_URL`)
-- Optional: MLflow, Redis, Milvus
+- A running **PostgreSQL** with an `mlflow` database — the `run-*.ps1` launchers start
+  the MLflow tracking server against it (DSN from `config/local.yaml`'s
+  `mlflow_backend_store_uri`, default `postgresql://postgres:postgres@localhost:5432/mlflow`).
+  See the MLflow note under **Run** to skip Postgres.
+- Optional: Redis, Milvus
 
 ### Install
 
@@ -266,40 +270,23 @@ the `app` entry resolve from the repo root (or set `PYTHONPATH=src`).
 ### Configure
 
 ```powershell
-Copy-Item .env.example .env
-# Edit .env: set OPENAI_API_KEY at minimum
+Copy-Item config\local.yaml.example config\local.yaml
+# Edit config/local.yaml: set openai_api_key at minimum, plus the
+# mlflow_backend_store_uri PostgreSQL DSN the launchers use to start MLflow.
 ```
 
-Configuration is centralized in `genie.platform.config.Settings`
-(pydantic-settings). It reads, in priority order: process env vars → a YAML file
-(`config/default.yaml` or `$GENIE_CONFIG_FILE`) → built-in defaults. Flat values
-come from `.env`; **nested** structures that env vars can't express — named MCP
-servers under `mcp_services`, LLM backends under `llm_services` — live in the YAML.
+Configuration is centralized in `genie.platform.config.Settings` (pydantic-settings).
+It resolves each key in priority order (first wins): `config/local.yaml` (gitignored —
+secrets & machine overrides) → `config/default.yaml` (committed canonical config, or
+`$GENIE_CONFIG_FILE`) → environment variables / `.env` → built-in field defaults.
+**YAML is authoritative over the environment** — an env var only fills a key that no
+YAML sets. **Nested** structures env vars can't express — named MCP servers under
+`mcp_services`, LLM backends under `llm_services` — live only in the YAML.
 
-### Pointing at a self-hosted LLM (`llm_services`)
-
-To run against an OpenAI-compatible self-hosted model instead of the flat
-`openai_*` config, declare it under `llm_services` in `config/default.yaml` (or
-`config/local.yaml`). `default` selects which model is used for **all** LLM calls
-(router, planner, synthesizer, agents); the `base_url` is derived as
-`http://{host}:{port}/{prompting_path}`:
-
-```yaml
-llm_services:
-  default: gpt_oss            # the model below is used for every LLM call
-  models:
-    gpt_oss:
-      host: "genieapps4.dev.oati.local"
-      port: 8033
-      model_name: "openai/gpt-oss-120b"
-      prompting_path: "v1"     # → base_url http://genieapps4.dev.oati.local:8033/v1
-      max_token_limit: 131072  # model context window (metadata; not max output tokens)
-      # api_key: "EMPTY"       # open endpoints need no key — a placeholder is applied
-```
-
-When a named backend is active, `openai_model` becomes an inert fallback (used only
-if `llm_services.default` is unset). Embeddings still use the flat `openai_*` config,
-so set `OPENAI_API_KEY` if semantic long-term memory (Milvus) is enabled.
+> `mlflow_backend_store_uri` is read **only by the `run-*.ps1` launchers** (not the
+> Python app) to start the MLflow server — keep it in `config/local.yaml`. Flat
+> values can still come from `.env` (`Copy-Item .env.example .env`) when you'd rather
+> not use YAML, but a YAML value wins if both are set.
 
 Key environment variables:
 
@@ -326,28 +313,41 @@ The system is multi-process; each piece runs on its own port:
 
 | Service | Port | Start command |
 | --- | --- | --- |
+| MLflow tracking server | 5000 | `uv run python -m mlflow server --backend-store-uri <postgres-dsn> --default-artifact-root ./mlartifacts --host 127.0.0.1 --port 5000` |
 | MCP tool server | 8001 | `uv run python -m services.mcp.weather_server` |
 | Registry / discovery | 8002 | `uv run python -m services.registry.server` |
+| RAG service | 8003 | `uv run python -m services.rag.server` |
 | Weather agent | 8010 | `$env:AGENT_PORT="8010"; uv run python -m applications.demo.weather.agent` |
 | Outage agent | 8011 | `$env:AGENT_PORT="8011"; uv run python -m applications.demo.outage.agent` |
 | RAG agent | 8012 | `$env:AGENT_PORT="8012"; uv run python -m applications.demo.rag.agent` |
 | Gateway (FastAPI) | 8000 | `uv run uvicorn app:app --host 0.0.0.0 --port 8000` |
 
-The easiest way is the launcher, which opens each in its own window in the right
-order (registry before agents register; agents before the gateway queries them):
+The easiest way is a launcher script, which opens each service in its own window in
+the right order (MLflow first; registry before agents register; agents before the
+gateway queries them):
 
 ```powershell
+# Development — gateway runs with --reload (hot-reload), binds to 127.0.0.1 only
+powershell -ExecutionPolicy Bypass -File scripts\run-dev.ps1
+
+# Full stack — the same services without gateway hot-reload
 powershell -ExecutionPolicy Bypass -File scripts\run-all.ps1
 ```
+
+Both launchers read `mlflow_backend_store_uri` from `config/local.yaml` and exit
+early if it isn't set, so configure it (above) before launching.
 
 Then open:
 
 - <http://127.0.0.1:8000> — chat UI
 - <http://127.0.0.1:8000/trace.html> — execution tracer (recommended starting point)
 
-> **Tip:** if you don't have an MLflow tracking server running, set
-> `MLFLOW_TRACKING_URI=sqlite:///mlflow_local.db` (a local store). Otherwise every
-> process blocks on connection retries at startup and during the first request.
+> **MLflow without PostgreSQL:** the launchers start a PostgreSQL-backed MLflow
+> server. To skip Postgres, don't rely on the launcher's server — point the app
+> straight at a local file store with `mlflow_tracking_uri: sqlite:///mlflow_local.db`
+> in `config/local.yaml`, or leave `mlflow_tracking_uri` unset to disable tracing
+> (it degrades to no-op, not a crash). Otherwise every process blocks on connection
+> retries at startup and during the first request.
 
 ---
 

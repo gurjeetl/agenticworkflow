@@ -17,14 +17,18 @@ from genie_rag_contracts.retrieval import RetrievalRequest, RetrievalResponse
 class RetrievalService(Protocol):
     """Anything that answers a :class:`RetrievalRequest` with a :class:`RetrievalResponse`."""
 
-    async def retrieve(self, request: RetrievalRequest) -> RetrievalResponse: ...
+    async def retrieve(self, request: RetrievalRequest) -> RetrievalResponse:
+        """Answer a ``RetrievalRequest`` with a ``RetrievalResponse``."""
+        ...
 
 
 @runtime_checkable
 class IngestionService(Protocol):
     """Anything that can ingest raw ``content`` into the retrieval corpus."""
 
-    async def ingest(self, content: str, metadata: dict[str, Any] | None = None) -> None: ...
+    async def ingest(self, content: str, metadata: dict[str, Any] | None = None) -> None:
+        """Ingest raw ``content`` (with optional metadata) into the retrieval corpus."""
+        ...
 
 
 __all__ = ["RetrievalService", "IngestionService"]

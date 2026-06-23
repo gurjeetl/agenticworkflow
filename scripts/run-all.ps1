@@ -60,7 +60,11 @@ function Get-ConfigValue($key) {
     return $null
 }
 
-$mlflow = "http://127.0.0.1:5000"
+# MLflow tracking-server host/port come from mlflow_tracking_uri (single source of
+# truth — the same URL the app/agents send spans to). Defaults to :5000.
+$mlflowUri = Get-ConfigValue 'mlflow_tracking_uri'; if (-not $mlflowUri) { $mlflowUri = "http://127.0.0.1:5000" }
+$mlflowParsed = [System.Uri]$mlflowUri
+$mlflow = $mlflowUri
 
 # Close any service windows left over from a previous run. The service windows
 # use -NoExit (so their logs stay readable), which means a `taskkill python.exe`
@@ -94,7 +98,7 @@ if (-not $mlflowBackend) {
 
 # MLflow tracking server (PostgreSQL backend). Must be up before the app/agents
 # so their trace spans have somewhere to go.
-Start-Svc "MLflow :5000" "$py -m mlflow server --backend-store-uri $mlflowBackend --default-artifact-root ./mlartifacts --host 127.0.0.1 --port 5000"
+Start-Svc "MLflow :$($mlflowParsed.Port)" "$py -m mlflow server --backend-store-uri $mlflowBackend --default-artifact-root ./mlartifacts --host $($mlflowParsed.Host) --port $($mlflowParsed.Port)"
 Start-Sleep -Seconds 5
 
 Start-Svc "MCP :8001"      "$py -m services.mcp.weather_server" @{ PYTHONPATH = $src }

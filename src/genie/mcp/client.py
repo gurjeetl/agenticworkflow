@@ -17,13 +17,16 @@ from genie.mcp.config import MCPAgentConfig, MCPServerConfig, MCPTransport
 
 class _Observer(Protocol):
     """Structural type for the host (the agent) that receives warning/error logs."""
-    def log(self, level: str, event: str, **attrs) -> None: ...
+    def log(self, level: str, event: str, **attrs) -> None:
+        """Receive a leveled log record with structured attributes."""
+        ...
 
 
 class MCPClient:
     """Builds MCP configuration from env, loads tools, and unwraps results."""
 
     def __init__(self, observer: _Observer) -> None:
+        """Hold the observer used for warning/error logging."""
         self._observer = observer
 
     def build_config_from_env(self) -> MCPAgentConfig | None:

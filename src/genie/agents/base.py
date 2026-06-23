@@ -86,6 +86,7 @@ class BaseAgent(Observable):
     _span_type: str = SpanType.AGENT
 
     def __init__(self) -> None:
+        """Wire up the LLM, MCP, and memory collaborators; load any env-configured MCP tools."""
         self.llm_client = LLMClient(make_chat_model(), observer=self)
         self.mcp_client = MCPClient(observer=self)
         self.memory = AgentMemory()
@@ -288,6 +289,7 @@ class BaseAgent(Observable):
     ) -> AgentState:
         """Shorthand for the single-MCP-tool case: call one tool, format its result."""
         def work() -> str:
+            """Call the single tool and run its raw result through ``format_text``."""
             return format_text(self.call_mcp_tool(tool_name, args))
 
         return self.answer_with(state, work, source=f"mcp:{tool_name}", **trace_kwargs)
@@ -359,6 +361,7 @@ class BaseAgent(Observable):
         return messages, state
 
     def _log_tool_calls(self, iteration: int, tool_calls: list[dict]) -> None:
+        """Emit a trace event naming the tools the model asked to call this iteration."""
         self.log_event(
             Events.LLM_TOOL_CALLS,
             iteration=iteration,
@@ -372,6 +375,7 @@ class BaseAgent(Observable):
         tool_calls: list[dict],
         tool_messages: list[ToolMessage],
     ) -> None:
+        """Emit a trace event with each tool's (truncated) result for this iteration."""
         self.log_event(
             Events.LLM_TOOL_RESULTS,
             iteration=iteration,
@@ -388,6 +392,7 @@ class BaseAgent(Observable):
         final_message_count: int | None = None,
         exceeded: bool = False,
     ) -> None:
+        """Emit the loop-end trace event (iteration/tool totals, or the limit-exceeded marker)."""
         attrs: dict = {"iterations": iterations, "total_tool_calls": total_tool_calls}
         if exceeded:
             attrs["exceeded_max_iters"] = True

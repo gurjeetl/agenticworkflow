@@ -52,6 +52,7 @@ class RouterAgent(BaseAgent):
     tool_names: list[str] = []
 
     def __init__(self) -> None:
+        """Set up the base agent and Registry client, routing triage through the cheaper ROUTER_MODEL when configured."""
         super().__init__()
         self._registry = get_registry_client()
         # Use a cheaper/faster model for routing when configured; the win of the

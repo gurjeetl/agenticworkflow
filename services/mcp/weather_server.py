@@ -6,9 +6,11 @@ Endpoint: http://127.0.0.1:8001/sse
 import json
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from mcp.server.fastmcp import FastMCP
 
+from genie.platform.config import get_settings
 from services.mcp.rag_index import get_index
 
 WEATHER_DATA: dict[str, str] = {
@@ -38,7 +40,15 @@ def _load_outage_data() -> dict[str, Any]:
     return _OUTAGE_CACHE
 
 
-mcp = FastMCP("weather-server", host="127.0.0.1", port=8001)
+# Bind to the host/port advertised by mcp_server_url so the server's bind address
+# and the URL clients connect to share one source of truth and can never drift.
+# Falls back to 127.0.0.1:8001 when the setting is unset or carries no port.
+_mcp_url = urlparse(get_settings().mcp_server_url or "")
+mcp = FastMCP(
+    "weather-server",
+    host=_mcp_url.hostname or "127.0.0.1",
+    port=_mcp_url.port or 8001,
+)
 
 
 @mcp.tool()

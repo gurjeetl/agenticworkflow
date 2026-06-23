@@ -31,6 +31,7 @@ class RedisStore:
     """
 
     def __init__(self) -> None:
+        """Read REDIS_URL and prepare a per-event-loop client cache; stay disabled if unset or the redis package is unavailable."""
         self._url = get_settings().redis_url
         self._enabled = False
         self._clients: dict = {}  # event loop -> redis client

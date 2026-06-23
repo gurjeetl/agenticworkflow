@@ -41,6 +41,7 @@ class RegistryClient:
         cache_ttl_s: float | None = None,
         timeout_s: float | None = None,
     ) -> None:
+        """Configure the Registry base URL, cache TTL, and request timeout (settings fill any omitted args)."""
         _s = get_settings()
         self._base_url = (base_url or _s.registry_url).rstrip("/")
         self._cache_ttl = float(cache_ttl_s if cache_ttl_s is not None else _s.registry_cache_ttl_s)

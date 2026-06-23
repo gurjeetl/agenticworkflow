@@ -68,6 +68,7 @@ def _chunk_file(path: Path, root: Path) -> list[dict]:
     buf: list[str] = []
 
     def flush() -> None:
+        """Emit the buffered lines as one heading-tagged chunk and reset the buffer."""
         body = "\n".join(buf).strip()
         if body:
             source = f"{rel}#{heading}" if heading else rel
@@ -95,6 +96,7 @@ class DocIndex:
     """In-memory BM25 index over a list of ``{"source", "text"}`` chunks."""
 
     def __init__(self, chunks: list[dict]) -> None:
+        """Tokenize the chunks and precompute BM25 term-frequency, length, and IDF statistics."""
         self.chunks = chunks
         self._tokens = [_tokenize(c["text"]) for c in chunks]
         self._tf = [Counter(toks) for toks in self._tokens]

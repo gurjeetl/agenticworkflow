@@ -97,6 +97,7 @@ class LLMGuard:
     """Eagerly-loaded local content guard. Constructed once at startup."""
 
     def __init__(self) -> None:
+        """Eagerly build the input/output scanner chains; a missing llm-guard dependency aborts startup by design."""
         # Plain imports: an ImportError propagates and aborts startup by design.
         from llm_guard.input_scanners import (
             Anonymize,
@@ -261,10 +262,12 @@ class LLMGuard:
         scores: dict[str, float] = {}
 
         def run_classifier(scanner: Any) -> tuple[str, bool, float]:
+            """Run one non-mutating scanner over the base text -> (name, is_valid, risk)."""
             _, is_valid, risk = scan_one(scanner, base_text)
             return type(scanner).__name__, bool(is_valid), float(risk)
 
         def run_sanitizer_chain() -> tuple[str, list[tuple[str, bool, float]]]:
+            """Run the sanitizing scanners in sequence, threading the sanitized text -> (text, per-scanner results)."""
             sanitized = base_text
             out: list[tuple[str, bool, float]] = []
             for scanner in sanitizers:

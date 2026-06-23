@@ -19,6 +19,7 @@ class Blackboard:
     """
 
     def __init__(self, thread_id: str, run_id: str) -> None:
+        """Set up the empty in-memory workspace for one run and grab the Redis mirror store."""
         self.thread_id = thread_id
         self.run_id = run_id
         self._mem: dict[str, dict] = {}

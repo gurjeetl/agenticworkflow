@@ -31,6 +31,7 @@ class MongoCommitStore:
     """
 
     def __init__(self) -> None:
+        """Open the pymongo client and bind the ``agent_commits`` / ``entity_links`` collections."""
         uri = get_settings().mongodb_uri
         db_name = get_settings().mongodb_db
         self._client = MongoClient(uri)

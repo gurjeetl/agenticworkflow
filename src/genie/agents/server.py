@@ -180,6 +180,7 @@ def create_agent_app(agent_cls: type, meta: AgentMeta) -> FastAPI:
         rpc_id = body.get("id")
 
         def _err(code: int, message: str) -> dict:
+            """Build a JSON-RPC error-response dict for the current request id."""
             return JsonRpcResponse(id=rpc_id, error=JsonRpcError(code=code, message=message)).model_dump(mode="json")
 
         if body.get("method") != METHOD_MESSAGE_SEND:

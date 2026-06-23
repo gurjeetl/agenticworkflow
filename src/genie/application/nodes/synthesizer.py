@@ -63,6 +63,7 @@ class SynthesizerAgent(BaseAgent):
     )
 
     def __init__(self) -> None:
+        """Set up the base agent, pointing the merge call at SYNTHESIZER_MODEL when configured (else the default model)."""
         super().__init__()
         # The synthesizer's merge call reads the whole blackboard (incl. large view
         # payloads), so it's the second-heaviest LLM call. Point it at a faster model

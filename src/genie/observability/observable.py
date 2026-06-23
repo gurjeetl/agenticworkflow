@@ -85,6 +85,7 @@ def _wrap_with_mlflow_span(method: Callable, owner_cls: type) -> Callable:
 
     @wraps(method)
     def wrapper(self, *args, **kwargs):
+        """Open an MLflow span around the wrapped call, recording inputs/outputs/errors."""
         cls = type(self)
         component_kind = getattr(cls, "_component_kind", fallback_kind)
         span_type = getattr(cls, "_span_type", fallback_span_type)

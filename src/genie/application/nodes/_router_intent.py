@@ -41,6 +41,7 @@ class IntentClassifier:
     """Counts distinct agents a prompt activates, to flag multi-intent prompts."""
 
     def __init__(self) -> None:
+        """Load intent-classification thresholds and backend from settings; embeddings and agent vectors load lazily."""
         s = get_settings()
         self._model_name = s.router_intent_model
         self._threshold = s.router_intent_threshold

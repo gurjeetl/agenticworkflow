@@ -44,6 +44,7 @@ class Executor(Observable):
     _span_type: str = SpanType.CHAIN
 
     def __init__(self) -> None:
+        """Wire up the Registry client and the A2A client used to dispatch tasks to agents."""
         super().__init__()
         self._registry = get_registry_client()
         self._a2a = A2AClient(registry=self._registry)
@@ -170,6 +171,7 @@ class Executor(Observable):
             return resolved
 
         def _sub(m: "re.Match") -> str:
+            """Replace one ``${...}`` reference with its blackboard value; leave it intact (with a warning) if unresolved."""
             resolved = self._lookup_ref(m.group(1), bb)
             if resolved is None:
                 self.log("warning", "executor.ref_unresolved", ref=m.group(1))

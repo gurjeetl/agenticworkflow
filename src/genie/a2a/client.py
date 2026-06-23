@@ -31,6 +31,7 @@ class A2AError(RuntimeError):
     """Raised on transport failure or a JSON-RPC/agent error response."""
 
     def __init__(self, message: str, code: int | None = None) -> None:
+        """Store the human-readable message plus an optional JSON-RPC error ``code``."""
         super().__init__(message)
         self.code = code
 
@@ -39,6 +40,7 @@ class A2AClient:
     """Resolve an agent via the Registry and send it an A2A ``message/send``."""
 
     def __init__(self, registry: RegistryClient | None = None) -> None:
+        """Use the given Registry client, or the process-wide one when omitted."""
         self._registry = registry or get_registry_client()
 
     # ------------------------------------------------------------------
@@ -118,6 +120,7 @@ class A2AClient:
         timeout = httpx.Timeout(sla_ms / 1000.0)
 
         async def _post(client: httpx.AsyncClient) -> Message:
+            """POST the JSON-RPC payload on ``client`` and parse the reply into a Message."""
             resp = await client.post(url, json=payload, headers=self._headers(), timeout=timeout)
             resp.raise_for_status()
             return self._parse_response(resp.json())

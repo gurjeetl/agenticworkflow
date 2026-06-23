@@ -10,6 +10,7 @@ class AgentMemory:
     """
 
     def __init__(self, max_window: int = 15) -> None:
+        """Set the short-term window size (max recent messages kept for the prompt)."""
         self.max_window = max_window
 
     def trim(self, messages: list[BaseMessage]) -> list[BaseMessage]:

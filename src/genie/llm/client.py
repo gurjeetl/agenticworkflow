@@ -21,14 +21,19 @@ from genie.platform.events import Events
 
 class _Observer(Protocol):
     """Structural type for the host (the agent) that receives logs/events."""
-    def log(self, level: str, event: str, **attrs) -> None: ...
-    def log_event(self, name: str, **attrs) -> None: ...
+    def log(self, level: str, event: str, **attrs) -> None:
+        """Receive a leveled log record with structured attributes."""
+        ...
+    def log_event(self, name: str, **attrs) -> None:
+        """Receive a named trace event with structured attributes."""
+        ...
 
 
 class LLMClient:
     """Owns the ChatOpenAI handle, message construction, and tool execution."""
 
     def __init__(self, llm: ChatOpenAI, observer: _Observer) -> None:
+        """Hold the chat model and the observer for logging/tracing; start with no tools bound."""
         self.llm = llm
         self.tools: list[BaseTool] = []
         self._observer = observer
@@ -67,6 +72,7 @@ class LLMClient:
         tool_map = {t.name: t for t in self.tools}
 
         async def _call_one(tc: dict) -> ToolMessage:
+            """Invoke one requested tool, returning an error ToolMessage on miss or failure."""
             tool = tool_map.get(tc["name"])
             if tool is None:
                 return ToolMessage(
