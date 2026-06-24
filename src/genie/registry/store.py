@@ -15,9 +15,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import motor.motor_asyncio
-
 from genie.platform.config import get_settings
+from genie.platform.mongo import get_async_mongo_db
 from genie.registry.agent_meta import AgentMeta
 
 COLLECTION = "agent_registry"
@@ -36,13 +35,9 @@ class RegistryStore:
     """
 
     def __init__(self) -> None:
-        """Open the Mongo client, bind the registry collection, and cache the configured TTL."""
-        _s = get_settings()
-        uri = _s.mongodb_uri
-        db_name = _s.mongodb_db
-        self._ttl = _s.registry_ttl_seconds
-        self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
-        self._coll = self._client[db_name][COLLECTION]
+        """Bind the registry collection off the shared async client and cache the configured TTL."""
+        self._ttl = get_settings().registry_ttl_seconds
+        self._coll = get_async_mongo_db()[COLLECTION]
 
     @property
     def ttl_seconds(self) -> int:
@@ -127,10 +122,6 @@ class RegistryStore:
         meta.registered_at = doc.get("registered_at")
         meta.instance_id = doc.get("instance_id")
         return meta
-
-    def close(self) -> None:
-        """Close the underlying Motor client."""
-        self._client.close()
 
 
 _store: RegistryStore | None = None

@@ -5,8 +5,6 @@ per-outage detail view (when ``outage_id`` is present). ``run(state)`` is the
 entry point the graph executor calls; the ``__main__`` block runs it standalone
 as a self-registering A2A service.
 """
-import json
-
 from genie.agents.base import BaseAgent
 from genie.registry import AgentMeta, FieldSpec, Skill
 from genie.application.state import AgentState
@@ -27,17 +25,9 @@ class OutageAgent(BaseAgent):
         "get_outage_analysis_summary",
     ]
 
-    @staticmethod
-    def _parse_json(s: str) -> dict:
-        """Best-effort JSON decode of an MCP tool result; return {} on bad/empty input."""
-        try:
-            return json.loads(s)
-        except (json.JSONDecodeError, TypeError):
-            return {}
-
     def _list_view(self) -> tuple[str, dict] | str:
         """Build the top-N outage list view, or a plain message when none exist."""
-        data = self._parse_json(self.call_mcp_tool("list_outage_ids", {}))
+        data = self.call_mcp_tool_structured("list_outage_ids", {}).structured or {}
         items = data.get("items", [])
         total = data.get("total")
         if not items:
@@ -47,18 +37,17 @@ class OutageAgent(BaseAgent):
         return text, view
 
     def _detail_view(self, outage_id: int) -> tuple[str, dict] | str:
-        """Fetch metadata + analysis for one outage; return an error message if missing."""
-        metadata = self._parse_json(
-            self.call_mcp_tool("get_outage_metadata", {"outage_id": outage_id})
-        )
-        if metadata.get("error"):
-            return f"Could not find outage {outage_id}: {metadata['error']}"
+        """Fetch metadata + analysis for one outage as a structured detail view.
 
-        analysis = self._parse_json(
-            self.call_mcp_tool("get_outage_analysis_summary", {"outage_id": outage_id})
-        )
-        if analysis.get("error"):
-            return f"Could not load analysis for outage {outage_id}: {analysis['error']}"
+        A missing outage makes the MCP tool raise (``isError``), which surfaces as
+        a ``LookupError`` that ``answer_with`` turns into a terminal agent error.
+        """
+        metadata = self.call_mcp_tool_structured(
+            "get_outage_metadata", {"outage_id": outage_id}
+        ).structured or {}
+        analysis = self.call_mcp_tool_structured(
+            "get_outage_analysis_summary", {"outage_id": outage_id}
+        ).structured or {}
 
         text = f"Outage {outage_id}: {metadata.get('short_description') or '(no description)'}"
         view = {

@@ -72,6 +72,24 @@ def _make_lifespan(settings: Settings):
         redis = get_redis_store()
         _log.info("redis.ready", extra={"attrs": {"enabled": redis.enabled}})
 
+        # Optional relational backends (Postgres / SQL Server). Best-effort: when a
+        # DSN is configured, run the health-check so a bad connection surfaces in the
+        # logs at startup; never block boot if it fails.
+        if settings.postgres_dsn:
+            try:
+                from genie.platform.postgres import postgres_healthcheck
+
+                _log.info("postgres.ready", extra={"attrs": {"ok": postgres_healthcheck()}})
+            except Exception as e:
+                _log.warning("postgres.healthcheck_failed", extra={"attrs": {"error": str(e)}})
+        if settings.sqlserver_dsn:
+            try:
+                from genie.platform.sqlserver import sqlserver_healthcheck
+
+                _log.info("sqlserver.ready", extra={"attrs": {"ok": sqlserver_healthcheck()}})
+            except Exception as e:
+                _log.warning("sqlserver.healthcheck_failed", extra={"attrs": {"error": str(e)}})
+
         # Content guard (ON by default; LLM_GUARD_ENABLED=0 to disable). When on,
         # constructing it here loads the local models, so a missing dependency or
         # un-loadable model aborts startup (fail-closed) rather than letting the
@@ -94,10 +112,9 @@ def _make_lifespan(settings: Settings):
 
         yield
 
-        store.close()
-        commits.close()
-        vectors.close()
-        await redis.close()
+        from genie.platform.db import close_all_connections
+
+        await close_all_connections()
 
     return lifespan
 

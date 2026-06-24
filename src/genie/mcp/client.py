@@ -1,10 +1,11 @@
-"""MCPClient: builds MCP server config from env/settings, loads tools, unwraps results.
+"""MCPClient: builds MCP server config from env/settings, loads tools, normalizes results.
 
 This is the platform's MCP connectivity surfaced to inheriting agents — it turns
 configured servers into permission-filtered LangChain tools.
 """
 import os
-from typing import Protocol
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -13,6 +14,25 @@ from genie.platform.config import get_settings
 from genie.platform.events import Events
 from genie.mcp.permissions import filter_tools_by_permission
 from genie.mcp.config import MCPAgentConfig, MCPServerConfig, MCPTransport
+
+
+@dataclass(frozen=True)
+class MCPToolResult:
+    """Normalized, spec-aligned view of an MCP ``CallToolResult``.
+
+    - ``text``: the human/LLM-readable text projection (joined text blocks; a
+      short placeholder when the result is binary-only). Never contains base64.
+    - ``structured``: the parsed ``structuredContent`` object (dict/list), with
+      FastMCP's ``{"result": X}`` wrapper for non-object returns unwrapped.
+    - ``blocks``: non-text content (image/audio/file/resource) as lightweight
+      by-reference descriptors ``{type, mime_type, uri, has_inline_data}`` —
+      deliberately *without* the inline base64 payload.
+    - ``is_error``: mirrors MCP ``isError`` (the tool reported an execution error).
+    """
+    text: str
+    structured: Any = None
+    blocks: tuple[dict, ...] = ()
+    is_error: bool = False
 
 
 class _Observer(Protocol):
@@ -112,16 +132,84 @@ class MCPClient:
         return filter_tools_by_permission(tools)
 
     @staticmethod
-    def unwrap_result(result) -> str:
-        """MCP tool results may come back as a list of content blocks; flatten to text."""
+    def normalize_result(result) -> MCPToolResult:
+        """Project a tool result into a spec-aligned :class:`MCPToolResult`.
+
+        The intended input is the langchain ``ToolMessage`` produced by invoking
+        an MCP tool with a ToolCall payload — the only invocation shape that
+        preserves ``structuredContent`` (it rides in the message ``artifact``).
+        The legacy ``str``/``dict``/``list`` shapes are still accepted so any
+        non-ToolMessage caller degrades gracefully to a text-only result.
+        """
+        # Legacy / raw shapes — keep working for robustness.
         if isinstance(result, str):
-            return result
+            return MCPToolResult(text=result)
+        if isinstance(result, dict):
+            return MCPToolResult(text="", structured=MCPClient._unwrap_structured(result))
         if isinstance(result, list):
-            parts: list[str] = []
-            for item in result:
-                if isinstance(item, dict) and "text" in item:
-                    parts.append(item["text"])
-                else:
-                    parts.append(str(item))
-            return " ".join(parts)
-        return str(result)
+            text, blocks = MCPClient._split_blocks(result)
+            return MCPToolResult(text=text, blocks=tuple(blocks))
+
+        # The normal path: a langchain ToolMessage.
+        content = getattr(result, "content", None)
+        artifact = getattr(result, "artifact", None)
+        is_error = getattr(result, "status", None) == "error"
+
+        structured = None
+        if isinstance(artifact, dict):
+            structured = MCPClient._unwrap_structured(artifact.get("structured_content"))
+
+        if isinstance(content, str):
+            text, blocks = content, []
+        elif isinstance(content, list):
+            text, blocks = MCPClient._split_blocks(content)
+        else:
+            text, blocks = "", []
+
+        if not text and blocks:
+            ref = blocks[0]
+            label = ref.get("mime_type") or ref.get("uri") or "binary"
+            text = f"[{ref.get('type') or 'content'}: {label}]"
+
+        return MCPToolResult(
+            text=text,
+            structured=structured,
+            blocks=tuple(blocks),
+            is_error=is_error,
+        )
+
+    @staticmethod
+    def unwrap_result(result) -> str:
+        """Back-compat shim: return just the text projection of a tool result."""
+        return MCPClient.normalize_result(result).text
+
+    @staticmethod
+    def _unwrap_structured(structured):
+        """Unwrap FastMCP's ``{"result": X}`` envelope used for non-object returns."""
+        if isinstance(structured, dict) and set(structured.keys()) == {"result"}:
+            return structured["result"]
+        return structured
+
+    @staticmethod
+    def _split_blocks(content: list) -> tuple[str, list[dict]]:
+        """Split a content-block list into joined text and base64-free non-text refs."""
+        text_parts: list[str] = []
+        blocks: list[dict] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                text_parts.append(item.get("text", ""))
+            elif isinstance(item, dict):
+                blocks.append(MCPClient._block_reference(item))
+            else:
+                text_parts.append(str(item))
+        return " ".join(p for p in text_parts if p), blocks
+
+    @staticmethod
+    def _block_reference(block: dict) -> dict:
+        """Reduce a non-text content block to a lightweight reference (no base64)."""
+        return {
+            "type": block.get("type"),
+            "mime_type": block.get("mime_type"),
+            "uri": block.get("url"),
+            "has_inline_data": bool(block.get("base64")),
+        }

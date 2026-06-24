@@ -27,6 +27,13 @@ dependencies = [
     # --- Optional stores (activate via env/config; no-op when unset) ---
     "redis>=4.2",
     "pymilvus[milvus_lite]>=2.4",
+    # Optional relational backends (activate via postgres_dsn / sqlserver_dsn):
+    # psycopg v3 gives sync + async + pooling for Postgres; pyodbc + aioodbc for
+    # SQL Server (the latter needs the OS "ODBC Driver 18 for SQL Server").
+    "psycopg[binary]>=3.1",
+    "psycopg_pool>=3.2",
+    "pyodbc>=5.0",
+    "aioodbc>=0.5",
     # --- Security (mandatory input/output content guard) ---
     "llm-guard>=0.3.15",
     # --- Router intent classifier (local, CPU) ---

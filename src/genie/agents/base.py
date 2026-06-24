@@ -6,6 +6,7 @@ only declare their prompt, tools, and any custom work.
 """
 import asyncio
 from typing import Callable
+from uuid import uuid4
 
 import mlflow
 from dotenv import load_dotenv
@@ -18,7 +19,7 @@ from genie.agents.memory import AgentMemory
 from genie.platform.config import get_settings
 from genie.platform.events import Events
 from genie.llm.client import LLMClient
-from genie.mcp.client import MCPClient
+from genie.mcp.client import MCPClient, MCPToolResult
 from genie.observability import Observable
 from genie.application.state import AgentState
 
@@ -222,23 +223,55 @@ class BaseAgent(Observable):
         reply = self._run_async(A2AClient().send(agent_id, args, context or {}, sla_ms=sla_ms))
         return get_text(reply)
 
-    def call_mcp_tool(self, name: str, args: dict) -> str:
-        """Invoke a single named MCP tool synchronously and return its text result.
+    def call_mcp_tool_structured(self, name: str, args: dict) -> MCPToolResult:
+        """Invoke a single named MCP tool and return its normalized, spec-aligned result.
 
-        Wraps the call in an mlflow TOOL span and unwraps the MCP content blocks
-        to a flat string. Raises ``LookupError`` if the tool was not loaded.
+        Invokes the tool with a ToolCall payload (the shape that preserves MCP
+        ``structuredContent``), wraps the call in an mlflow TOOL span, and
+        normalizes the resulting ``ToolMessage`` into an :class:`MCPToolResult`
+        (text + parsed ``structured`` + non-text ``blocks``). Raises
+        ``LookupError`` if the tool was not loaded or if the tool reported an
+        execution error (MCP ``isError``).
         """
         tool = next((t for t in self.tools if t.name == name), None)
         if tool is None:
             raise LookupError(f"MCP tool '{name}' not available")
+        # A ToolCall (with an id) makes langchain build a ToolMessage carrying the
+        # artifact (structuredContent); bare args would discard it.
+        tool_call = {"name": name, "args": args, "id": uuid4().hex, "type": "tool_call"}
         with mlflow.start_span(name=f"mcp.{name}", span_type=SpanType.TOOL) as span:
             span.set_inputs({"tool": name, "args": args})
-            raw = self._run_async(tool.ainvoke(args))
-            report = MCPClient.unwrap_result(raw)
-            span.set_outputs({"result": report})
+            message = self._run_async(tool.ainvoke(tool_call))
+            result = MCPClient.normalize_result(message)
+            # Record the structured projection only — never the raw base64 blocks.
+            span.set_outputs({
+                "text": result.text[:1000],
+                "structured": result.structured,
+                "blocks": list(result.blocks),
+                "is_error": result.is_error,
+            })
             span.set_attribute("mcp.tool", name)
-        self.log_event(Events.MCP_TOOL_CALL, tool=name, args=str(args), result=report[:200])
-        return report
+            span.set_attribute("mcp.is_error", result.is_error)
+        self.log_event(
+            Events.MCP_TOOL_CALL,
+            tool=name,
+            args=str(args),
+            result=result.text[:200],
+            structured=result.structured is not None,
+            is_error=result.is_error,
+        )
+        if result.is_error:
+            raise LookupError(f"MCP tool '{name}' failed: {result.text or 'tool error'}")
+        return result
+
+    def call_mcp_tool(self, name: str, args: dict) -> str:
+        """Invoke a single named MCP tool and return just its text projection.
+
+        Convenience wrapper over :meth:`call_mcp_tool_structured` for the
+        text-only case (e.g. tools that return a plain human-readable string).
+        Raises ``LookupError`` if the tool is missing or reported an error.
+        """
+        return self.call_mcp_tool_structured(name, args).text
 
     def answer_with(
         self,
@@ -284,13 +317,18 @@ class BaseAgent(Observable):
         state: AgentState,
         tool_name: str,
         args: dict,
-        format_text: Callable[[str], str],
+        format_text: Callable[[MCPToolResult], "str | tuple[str, dict]"],
         **trace_kwargs,
     ) -> AgentState:
-        """Shorthand for the single-MCP-tool case: call one tool, format its result."""
-        def work() -> str:
-            """Call the single tool and run its raw result through ``format_text``."""
-            return format_text(self.call_mcp_tool(tool_name, args))
+        """Shorthand for the single-MCP-tool case: call one tool, format its result.
+
+        ``format_text`` receives the normalized :class:`MCPToolResult` (text +
+        parsed ``structured`` + non-text ``blocks``) and returns either the final
+        text or a ``(text, view)`` tuple for the frontend renderer.
+        """
+        def work():
+            """Call the single tool and run its normalized result through ``format_text``."""
+            return format_text(self.call_mcp_tool_structured(tool_name, args))
 
         return self.answer_with(state, work, source=f"mcp:{tool_name}", **trace_kwargs)
 
@@ -380,7 +418,9 @@ class BaseAgent(Observable):
             Events.LLM_TOOL_RESULTS,
             iteration=iteration,
             results=str([
-                {"name": tc["name"], "result": str(tm.content)[:200]}
+                # Project to the text view so binary content blocks never get
+                # stringified (base64) into the trace.
+                {"name": tc["name"], "result": MCPClient.normalize_result(tm).text[:200]}
                 for tc, tm in zip(tool_calls, tool_messages)
             ]),
         )

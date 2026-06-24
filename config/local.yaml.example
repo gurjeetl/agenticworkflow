@@ -14,6 +14,12 @@ openai_api_key: sk-...
 # to launch the MLflow server. Required to start the local MLflow server.
 mlflow_backend_store_uri: postgresql://postgres:postgres@localhost:5432/mlflow
 
+# Optional relational backends — connection strings (off unless set). Read by
+# genie.platform.postgres / genie.platform.sqlserver. SQL Server needs the OS
+# "ODBC Driver 18 for SQL Server". Env fallbacks: POSTGRES_DSN / SQLSERVER_DSN.
+# postgres_dsn: postgresql://user:pass@localhost:5432/genie
+# sqlserver_dsn: "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost,1433;DATABASE=genie;UID=sa;PWD=changeme;TrustServerCertificate=yes"
+
 # Optional secrets / per-machine overrides:
 # mcp_auth_token: ""
 # registry_auth_token: ""

@@ -40,7 +40,7 @@
 
 ## Mcp_server (1 files)
 
-- `mcp_server\weather_server.py` — get_weather, get_outage_report_summary, list_outage_ids, get_outage_metadata, get_outage_analysis_summary, get_outage_attribute_analysis, …
+- `mcp_server\genie_mcp_server.py` — get_weather, get_outage_report_summary, list_outage_ids, get_outage_metadata, get_outage_analysis_summary, get_outage_attribute_analysis, …
 
 ## Mcpconfig (1 files)
 

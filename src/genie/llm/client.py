@@ -4,6 +4,7 @@ Centralizes invoke/error-logging and the async tool-call fan-out so BaseAgent an
 its subclasses don't repeat the LangChain plumbing.
 """
 import asyncio
+import json
 from typing import Protocol
 
 from langchain_core.messages import (
@@ -16,6 +17,7 @@ from langchain_core.messages import (
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 
+from genie.mcp.client import MCPClient
 from genie.platform.events import Events
 
 
@@ -80,8 +82,11 @@ class LLMClient:
                     tool_call_id=tc["id"],
                 )
             try:
-                result = await tool.ainvoke(tc["args"])
-                return ToolMessage(content=str(result), tool_call_id=tc["id"])
+                # Invoke with the full ToolCall (not bare args) so langchain builds
+                # a ToolMessage carrying the artifact (structuredContent) and error
+                # status; then collapse it to an LLM-safe text projection.
+                message = await tool.ainvoke({**tc, "type": "tool_call"})
+                return self._sanitize_tool_message(message, tc["id"])
             except Exception as e:
                 self._observer.log(
                     "error",
@@ -96,6 +101,26 @@ class LLMClient:
                 )
 
         return list(await asyncio.gather(*(_call_one(tc) for tc in tool_calls)))
+
+    @staticmethod
+    def _sanitize_tool_message(message: ToolMessage, tool_call_id: str) -> ToolMessage:
+        """Collapse a tool ToolMessage to an LLM-safe text projection.
+
+        MCP results can carry image/file content blocks (with inline base64) and a
+        structured artifact. Feeding raw blocks into the next prompt bloats it with
+        binary the model can't use, so we reduce the message to its text projection
+        (preferring the structured payload as JSON when there is no text), while
+        preserving the tool_call_id and error status.
+        """
+        result = MCPClient.normalize_result(message)
+        text = result.text
+        if not text and result.structured is not None:
+            text = json.dumps(result.structured, default=str)[:4000]
+        return ToolMessage(
+            content=text or "(no output)",
+            tool_call_id=getattr(message, "tool_call_id", None) or tool_call_id,
+            status=getattr(message, "status", "success"),
+        )
 
     @staticmethod
     def build_messages(

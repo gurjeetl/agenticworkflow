@@ -4,12 +4,11 @@ framework runs without Redis."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from typing import Any
 
-from genie.platform.config import get_settings
+from genie.platform.redis import get_async_redis_client, redis_enabled
 
 _log = logging.getLogger(__name__)
 
@@ -22,28 +21,16 @@ class RedisStore:
     No-ops when REDIS_URL is unset or the redis package is missing — keeps the
     framework usable for dev without standing up Redis.
 
-    Loop-aware: redis.asyncio connections are bound to the event loop that
-    created them. The Executor mirrors the blackboard from a transient
-    ``_run_async`` loop while the FastAPI handlers read/delete on the main loop —
-    sharing one client across loops raises "attached to a different loop" /
-    stale-connection errors (which silently dropped writes and made
-    delete_run/get_run flaky). We therefore keep one client per event loop.
+    Connection management (including the per-event-loop client cache that keeps
+    redis.asyncio clients from crossing loops) lives in :mod:`genie.platform.redis`;
+    this store is just the blackboard domain logic on top.
     """
 
     def __init__(self) -> None:
-        """Read REDIS_URL and prepare a per-event-loop client cache; stay disabled if unset or the redis package is unavailable."""
-        self._url = get_settings().redis_url
-        self._enabled = False
-        self._clients: dict = {}  # event loop -> redis client
-        if not self._url:
-            _log.warning("redis.disabled", extra={"attrs": {"reason": "REDIS_URL unset"}})
-            return
-        try:
-            from redis import asyncio as redis_asyncio  # noqa: F401
-        except ImportError:
-            _log.warning("redis.disabled", extra={"attrs": {"reason": "redis package not installed"}})
-            return
-        self._enabled = True
+        """Record whether Redis is available; connections come from the shared platform module."""
+        self._enabled = redis_enabled()
+        if not self._enabled:
+            _log.warning("redis.disabled", extra={"attrs": {"reason": "REDIS_URL unset or redis package missing"}})
 
     @property
     def enabled(self) -> bool:
@@ -51,26 +38,8 @@ class RedisStore:
         return self._enabled
 
     def _client(self):
-        """A redis client bound to the CURRENT running loop (created on demand)."""
-        if not self._enabled:
-            return None
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return None
-        # Drop clients whose loop has closed so the dict doesn't grow unbounded.
-        for dead in [l for l in self._clients if l.is_closed()]:
-            self._clients.pop(dead, None)
-        client = self._clients.get(loop)
-        if client is None:
-            from redis import asyncio as redis_asyncio
-            # protocol=2 (RESP2): redis-py 8 defaults to RESP3 and sends `HELLO 3`
-            # on connect, which Redis < 6 rejects. RESP2 works on all versions.
-            client = redis_asyncio.from_url(
-                self._url, encoding="utf-8", decode_responses=True, protocol=2
-            )
-            self._clients[loop] = client
-        return client
+        """A redis client bound to the CURRENT running loop (from the shared platform module)."""
+        return get_async_redis_client()
 
     async def set_with_ttl(self, key: str, value: Any, ttl_seconds: int = _DEFAULT_TTL_SECONDS) -> None:
         """Write a JSON-encoded value with a TTL. No-op/fail-open when disabled."""
@@ -127,15 +96,6 @@ class RedisStore:
                 await client.delete(key)
         except Exception as e:
             _log.warning("redis.delete_run_failed", extra={"attrs": {"pattern": pattern, "error": str(e)}})
-
-    async def close(self) -> None:
-        """Close every per-loop client and clear the cache (errors swallowed)."""
-        for client in list(self._clients.values()):
-            try:
-                await client.close()
-            except Exception:
-                pass
-        self._clients.clear()
 
 
 _store: RedisStore | None = None

@@ -26,7 +26,10 @@ class WeatherAgent(BaseAgent):
             state,
             tool_name="get_weather",
             args={"city": city},
-            format_text=lambda report: f"Here's the current weather for {city.title()}: {report}",
+            format_text=lambda res: (
+                f"Here's the current weather for {city.title()}: "
+                f"{(res.structured or {}).get('report', res.text)}"
+            ),
             city=city,
         )
 

@@ -6,13 +6,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from pymongo import ASCENDING
 from pymongo.errors import PyMongoError
 
-from genie.memory.commit_store import get_commit_store
-from genie.platform.config import get_settings
+from genie.platform.mongo import get_sync_mongo_db
 
 _log = logging.getLogger(__name__)
 
@@ -34,17 +32,14 @@ class FactsStore:
         ``thread_id``. Carry a sliding TTL (see ``_SESSION_TTL``).
 
     Sync on purpose (pymongo, not motor): the Planner and Synthesizer that call
-    this are sync LangGraph nodes. Reuses the commit store's MongoClient so the
+    this are sync LangGraph nodes. Uses the shared platform sync MongoClient so the
     whole sync side shares one connection pool. Writes are best-effort — a failure
     is logged and swallowed so a turn never crashes on a persistence error.
     """
 
     def __init__(self) -> None:
-        """Bind the ``agent_facts`` collection, reusing the commit store's pymongo client."""
-        # Reuse the commit store's pymongo client (one pool for the sync side).
-        client = get_commit_store()._client
-        db_name = get_settings().mongodb_db
-        self._facts = client[db_name]["agent_facts"]
+        """Bind the ``agent_facts`` collection off the shared sync client."""
+        self._facts = get_sync_mongo_db()["agent_facts"]
 
     @property
     def enabled(self) -> bool:

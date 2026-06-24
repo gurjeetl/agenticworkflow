@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     milvus_db_path: str | None = None
     milvus_token: str | None = None
     milvus_collection: str = "long_term_memory"
+    # Optional relational backends — connection strings only; no-op when unset.
+    # postgres_dsn: libpq URI, e.g. postgresql://user:pass@host:5432/db
+    postgres_dsn: str | None = None
+    # sqlserver_dsn: full ODBC connection string (needs "ODBC Driver 18 for SQL Server")
+    sqlserver_dsn: str | None = None
 
     # ── Registry / discovery ─────────────────────────────────────────────────
     registry_url: str = "http://127.0.0.1:8002"

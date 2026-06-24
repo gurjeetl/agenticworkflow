@@ -8,10 +8,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from pymongo import ASCENDING, MongoClient
+from pymongo import ASCENDING
 from pymongo.errors import PyMongoError
 
-from genie.platform.config import get_settings
+from genie.platform.mongo import get_sync_mongo_db
 
 _log = logging.getLogger(__name__)
 
@@ -31,11 +31,8 @@ class MongoCommitStore:
     """
 
     def __init__(self) -> None:
-        """Open the pymongo client and bind the ``agent_commits`` / ``entity_links`` collections."""
-        uri = get_settings().mongodb_uri
-        db_name = get_settings().mongodb_db
-        self._client = MongoClient(uri)
-        db = self._client[db_name]
+        """Bind the ``agent_commits`` / ``entity_links`` collections off the shared sync client."""
+        db = get_sync_mongo_db()
         self._commits = db["agent_commits"]
         self._links = db["entity_links"]
 
@@ -114,20 +111,12 @@ class MongoCommitStore:
         except PyMongoError as e:
             _log.warning("commit_store.link_failed", extra={"attrs": {"error": str(e)}})
 
-    def close(self) -> None:
-        """Close the underlying pymongo client (errors swallowed)."""
-        try:
-            self._client.close()
-        except Exception:
-            pass
-
 
 _store: MongoCommitStore | None = None
 
 
 def get_commit_store() -> MongoCommitStore:
-    """Return the process-wide MongoCommitStore singleton, creating it on first use.
-    Also the shared sync MongoClient source reused by FactsStore."""
+    """Return the process-wide MongoCommitStore singleton, creating it on first use."""
     global _store
     if _store is None:
         _store = MongoCommitStore()

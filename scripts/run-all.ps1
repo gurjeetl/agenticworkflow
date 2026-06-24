@@ -1,7 +1,7 @@
 # Launch the full multi-process stack for local development.
 #
 #   MLflow server   : 5000   (python -m mlflow server ...)   <- tracing backend
-#   MCP server      : 8001   (python -m services.mcp.weather_server)
+#   MCP server      : 8001   (python -m services.mcp.genie_mcp_server)
 #   Registry service: 8002   (python -m services.registry.server)
 #   RAG service     : 8003   (python -m services.rag.server)
 #   Weather agent   : 8010   (python -m applications.demo.weather.agent)
@@ -101,7 +101,7 @@ if (-not $mlflowBackend) {
 Start-Svc "MLflow :$($mlflowParsed.Port)" "$py -m mlflow server --backend-store-uri $mlflowBackend --default-artifact-root ./mlartifacts --host $($mlflowParsed.Host) --port $($mlflowParsed.Port)"
 Start-Sleep -Seconds 5
 
-Start-Svc "MCP :8001"      "$py -m services.mcp.weather_server" @{ PYTHONPATH = $src }
+Start-Svc "MCP :8001"      "$py -m services.mcp.genie_mcp_server" @{ PYTHONPATH = $src }
 Start-Svc "Registry :8002" "$py -m services.registry.server" @{ PYTHONPATH = $src }
 Start-Svc "RAG Service :8003" "$py -m services.rag.server" @{ PYTHONPATH = $src }
 Start-Sleep -Seconds 2

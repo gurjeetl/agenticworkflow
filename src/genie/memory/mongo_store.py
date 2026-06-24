@@ -4,12 +4,11 @@ the conversation list/resume UI."""
 
 from datetime import datetime, timezone
 
-import motor.motor_asyncio
 from langchain_core.messages import BaseMessage, messages_from_dict, messages_to_dict
 from pymongo import DESCENDING
 from pymongo.errors import OperationFailure
 
-from genie.platform.config import get_settings
+from genie.platform.mongo import get_async_mongo_db
 
 # Hot recent-context cache TTL. Short-term memory is the fast working set for an
 # active session; the durable `conversations` collection (no TTL) is the source
@@ -32,11 +31,8 @@ class MongoMemoryStore:
     structured facts owned by the sync FactsStore. MongoDB is required."""
 
     def __init__(self):
-        """Open the async motor client and bind the short-term, long-term, conversation, and facts collections."""
-        uri = get_settings().mongodb_uri
-        db_name = get_settings().mongodb_db
-        self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
-        self._db = self._client[db_name]
+        """Bind the short-term, long-term, conversation, and facts collections off the shared async client."""
+        self._db = get_async_mongo_db()
         self._short_term = self._db["short_term_memory"]
         self._long_term = self._db["long_term_memory"]
         # Durable, never-expiring conversation history powering the conversation
@@ -161,10 +157,6 @@ class MongoMemoryStore:
         async for doc in self._facts.find({"scope": "session", "thread_id": thread_id}):
             out[doc["key"]] = doc["value"]
         return out
-
-    def close(self):
-        """Close the underlying motor client."""
-        self._client.close()
 
 
 _store: MongoMemoryStore | None = None

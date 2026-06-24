@@ -25,7 +25,7 @@
       * Processes are detached and logged to files, not consoles.
 
     Ports / processes:
-      MCP server        : 8001   services.mcp.weather_server
+      MCP server        : 8001   services.mcp.genie_mcp_server
       Registry          : 8002   services.registry.server
       RAG service       : 8003   services.rag.server
       Weather agent     : 8010   applications.demo.weather.agent
@@ -187,7 +187,7 @@ function Start-Bg($name, $argline, $svcEnv = @{}) {
 
 Write-Host "Starting backend services..."
 # Backend services first (registry must be up before agents self-register).
-Start-Bg "mcp"      "python -m services.mcp.weather_server"
+Start-Bg "mcp"      "python -m services.mcp.genie_mcp_server"
 Start-Bg "registry" "python -m services.registry.server"
 Start-Bg "rag"      "python -m services.rag.server"
 Start-Sleep -Seconds 3

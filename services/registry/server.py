@@ -49,7 +49,9 @@ async def lifespan(app: FastAPI):
     await store.ensure_indexes()
     _log.info("registry.indexes_ensured", extra={"attrs": {"ttl_seconds": store.ttl_seconds}})
     yield
-    store.close()
+    from genie.platform.db import close_all_connections
+
+    await close_all_connections()
 
 
 app = FastAPI(title="Agent Registry Service", lifespan=lifespan)

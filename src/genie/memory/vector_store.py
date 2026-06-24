@@ -5,11 +5,11 @@ unset or pymilvus is missing, so the framework runs without Milvus."""
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any
 
 from genie.platform.config import get_settings
+from genie.platform.milvus import get_milvus_client
 
 _log = logging.getLogger(__name__)
 
@@ -41,41 +41,19 @@ class MilvusVectorStore:
     """
 
     def __init__(self) -> None:
-        """Resolve the Milvus URI (remote http(s) or local Lite file), guarding the import-time env quirk."""
-        # MILVUS_URI may be a remote http(s) endpoint OR a local Milvus Lite file
-        # (e.g. ./milvus_local.db — no server/Docker needed). MILVUS_DB_PATH is an
-        # explicit alias for the Lite-file case.
+        """Acquire the shared Milvus client; bind collection/embedding config from settings."""
         settings = get_settings()
-        self._uri = settings.milvus_uri or settings.milvus_db_path
-        # pymilvus' ORM reads os.environ['MILVUS_URI'] at import and only accepts
-        # http(s) URIs — a local file path there would crash `import pymilvus`
-        # process-wide. Move any non-http value out of the env before importing.
-        env_uri = os.environ.get("MILVUS_URI")
-        if env_uri and not env_uri.lower().startswith("http"):
-            os.environ.pop("MILVUS_URI", None)
         self._collection = settings.milvus_collection
         self._embed_model = settings.openai_embed_model
         self._dim = settings.openai_embed_dim
-        self._client = None
         self._embeddings = None
-
-        if not self._uri:
-            _log.warning("milvus.disabled", extra={"attrs": {"reason": "MILVUS_URI/MILVUS_DB_PATH unset"}})
-            return
-        try:
-            from pymilvus import MilvusClient
-        except ImportError:
-            _log.warning("milvus.disabled", extra={"attrs": {"reason": "pymilvus not installed"}})
-            return
-        try:
-            self._client = MilvusClient(uri=self._uri, token=get_settings().milvus_token or "")
-        except Exception as e:
-            _log.warning("milvus.connect_failed", extra={"attrs": {"uri": self._uri, "error": str(e)}})
-            self._client = None
+        # Connection (URI resolution, the pymilvus env quirk, connect) is owned by
+        # the shared platform module; None when Milvus is unconfigured/unavailable.
+        self._client = get_milvus_client()
 
     @property
     def enabled(self) -> bool:
-        """True only when a Milvus client connected successfully at construction."""
+        """True only when the shared Milvus client connected successfully."""
         return self._client is not None
 
     # ------------------------------------------------------------------
@@ -206,16 +184,6 @@ class MilvusVectorStore:
         except Exception as e:
             _log.warning("milvus.insert_failed", extra={"attrs": {"error": str(e)}})
             return {"enabled": True, "inserted": False, "reason": str(e)}
-
-    def close(self) -> None:
-        """Close the Milvus client if connected (errors swallowed)."""
-        if self._client:
-            try:
-                self._client.close()
-            except Exception:
-                pass
-            self._client = None
-
 
 _store: MilvusVectorStore | None = None
 

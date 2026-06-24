@@ -5,8 +5,6 @@ compose an answer from only that context, citing sources as [n]. ``run(state)``
 is the entry point the graph executor calls; the ``__main__`` block runs it
 standalone as a self-registering A2A service.
 """
-import json
-
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from genie.agents.base import BaseAgent
@@ -31,21 +29,15 @@ class RagAgent(BaseAgent):
     )
     tool_names: list[str] = ["search_docs"]
 
-    @staticmethod
-    def _parse_json(s: str) -> dict:
-        """Best-effort JSON decode of an MCP tool result; return {} on bad/empty input."""
-        try:
-            return json.loads(s)
-        except (json.JSONDecodeError, TypeError):
-            return {}
-
     def _answer(self, query: str) -> tuple[str, dict] | str:
         """Retrieve doc chunks, ask the LLM for a grounded answer, and attach a sources view.
 
         Returns a plain message when retrieval finds nothing, otherwise
         ``(answer, view)`` where ``view`` lists the cited chunk sources/scores.
         """
-        data = self._parse_json(self.call_mcp_tool("search_docs", {"query": query, "k": 4}))
+        data = self.call_mcp_tool_structured(
+            "search_docs", {"query": query, "k": 4}
+        ).structured or {}
         chunks = data.get("chunks", [])
         if not chunks:
             return "I couldn't find anything about that in the documentation."

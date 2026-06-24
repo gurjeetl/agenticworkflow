@@ -64,6 +64,11 @@ redis_url: redis://localhost:6379/0
 milvus_db_path: ./milvus_store.db
 # milvus_uri: http://localhost:19530
 milvus_collection: long_term_memory
+# Optional relational backends (off unless a DSN is set). Connection strings are
+# read here by genie.platform.postgres / genie.platform.sqlserver. Prefer setting
+# the real values in config/local.yaml. Env fallbacks: POSTGRES_DSN / SQLSERVER_DSN.
+# postgres_dsn: postgresql://user:pass@localhost:5432/genie
+# sqlserver_dsn: "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost,1433;DATABASE=genie;UID=sa;PWD=changeme;TrustServerCertificate=yes"
 openai_embed_model: text-embedding-3-small
 openai_embed_dim: 1536
 

@@ -38,7 +38,7 @@
   - class MCPTransport
   - class MCPServerConfig
   - class MCPAgentConfig
-- `mcp_server\weather_server.py`
+- `mcp_server\genie_mcp_server.py`
   - function get_weather: (city) -> str
   - function get_outage_report_summary: () -> dict[str, Any]
   - function list_outage_ids: () -> dict[str, Any]
