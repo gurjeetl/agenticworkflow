@@ -1,0 +1,90 @@
+{
+  // Debug configurations for the genie-platform multi-service stack.
+  // Mirrors scripts/run-all.ps1: importable code lives under src/ (the `genie`
+  // and `applications` packages) while `services.*` and `app` resolve from the
+  // repo root, so every config sets cwd = repo root and PYTHONPATH = src.
+  //
+  // Note: these debug only the Python services. MLflow (:5000) and Redis (:6379)
+  // are infrastructure — start them first manually.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "App :8000",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/app.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+    },
+    {
+      "name": "MCP :8001",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "services.mcp.weather_server",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+    },
+    {
+      "name": "Registry :8002",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "services.registry.server",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+    },
+    {
+      "name": "RAG Service :8003",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "services.rag.server",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}/src" }
+    },
+    {
+      "name": "Weather Agent :8010",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "applications.demo.weather.agent",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}/src", "AGENT_PORT": "8010" }
+    },
+    {
+      "name": "Outage Agent :8011",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "applications.demo.outage.agent",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}/src", "AGENT_PORT": "8011" }
+    },
+    {
+      "name": "RAG Agent :8012",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "applications.demo.rag.agent",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "env": { "PYTHONPATH": "${workspaceFolder}/src", "AGENT_PORT": "8012" }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "All Genie Services",
+      "configurations": [
+        "MCP :8001",
+        "Registry :8002",
+        "RAG Service :8003",
+        "Weather Agent :8010",
+        "Outage Agent :8011",
+        "RAG Agent :8012",
+        "App :8000"
+      ],
+      "stopAll": true
+    }
+  ]
+}
