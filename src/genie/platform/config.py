@@ -1,21 +1,21 @@
-"""Central platform configuration via pydantic-settings — YAML-first.
+"""Central platform configuration via pydantic-settings — env-first (12-factor).
 
-A single ``Settings`` object is the platform's source of truth. Configuration is
-driven by YAML; resolution order (highest priority first):
+A single ``Settings`` object is the platform's source of truth. Configuration
+resolves in this order (highest priority first):
 
-1. ``config/local.yaml`` — gitignored. Secrets (API keys, tokens, DB DSNs) and
+1. Environment variables / ``.env`` (the unprefixed names — ``OPENAI_API_KEY``,
+   ``AGENT_PORT``, …). The environment is authoritative: a key set here overrides
+   the same key in YAML, so a deploy or container can override committed config
+   without editing any file (the 12-factor precedence).
+2. ``config/local.yaml`` — gitignored. Secrets (API keys, tokens, DB DSNs) and
    machine-specific overrides. NEVER commit this file.
-2. ``config/default.yaml`` — committed. The canonical, non-secret configuration.
+3. ``config/default.yaml`` — committed. The canonical, non-secret configuration.
    (``$GENIE_CONFIG_FILE`` overrides this path.)
-3. Environment variables (the unprefixed names — ``OPENAI_API_KEY``, ``MONGODB_URI``,
-   …). Only used for keys NOT set in any YAML — a fallback, no longer the primary
-   path. Useful for injecting a secret without writing it to a file.
 4. The field defaults declared below.
 
-YAML is authoritative: a key set in YAML overrides the same environment variable.
 Nested structures (``mcp_services``, ``llm_services``) come only from YAML, since
 env vars cannot express nested dicts. All modules read configuration through
-``get_settings()`` rather than ``os.getenv`` so YAML drives the whole platform.
+``get_settings()`` rather than ``os.getenv`` so the layering applies platform-wide.
 """
 from __future__ import annotations
 
@@ -77,11 +77,11 @@ class LLMServicesConfig(BaseModel):
 # ── Top-level Settings ────────────────────────────────────────────────────────
 
 class Settings(BaseSettings):
-    """The platform's single configuration object (YAML > env > field defaults).
+    """The platform's single configuration object (env > YAML > field defaults).
 
-    Fields bind to the existing unprefixed env-var names, so an environment
-    variable fills any key not set in YAML. YAML is authoritative when both set a
-    key — see :meth:`from_yaml` / :func:`get_settings` for the full layering.
+    Fields bind to the existing unprefixed env-var names. The environment is
+    authoritative when both an env var and YAML set a key — see :meth:`from_yaml`
+    / :func:`get_settings` for the full layering.
     """
 
     # env_prefix="" + case_sensitive=False → field `openai_model` binds to env
@@ -93,6 +93,13 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
+
+    # ── Runtime environment ──────────────────────────────────────────────────
+    # Binds to env var ENVIRONMENT. "development" (the default) enables dev-only
+    # conveniences such as the per-agent static port in run_agent; any other value
+    # (production, staging, …) disables them so prod uses an explicit port pin or
+    # an ephemeral port + discovery. Real deployments set ENVIRONMENT=production.
+    environment: str = "development"
 
     # ── LLM (OpenAI-compatible) ──────────────────────────────────────────────
     openai_api_key: str | None = None
@@ -146,7 +153,10 @@ class Settings(BaseSettings):
 
     # ── Agent service harness ────────────────────────────────────────────────
     agent_host: str = "127.0.0.1"
-    agent_port: int = 8010
+    # None → no override; the agent's own per-agent default (passed to run_agent)
+    # applies, falling back to an OS-assigned ephemeral port. Set AGENT_PORT (env,
+    # top priority) or agent_port (YAML) to pin a specific port.
+    agent_port: int | None = None
     agent_advertise_host: str | None = None
     agent_advertise_port: int | None = None
     agent_invoke_token: str | None = None
@@ -212,16 +222,27 @@ class Settings(BaseSettings):
     rag_service_timeout_s: float = 3.0
     rag_service_auth_token: str | None = None
 
+    @property
+    def is_development(self) -> bool:
+        """True when running in development mode (enables dev-only conveniences).
+
+        Driven by the ``environment`` setting / ``ENVIRONMENT`` env var; any value
+        other than "development" (production, staging, …) returns False.
+        """
+        return self.environment.strip().lower() == "development"
+
     @classmethod
     def from_yaml(cls, *paths: str | Path) -> "Settings":
-        """Build Settings from one or more YAML files layered over env + defaults.
+        """Build Settings layering the environment over YAML over field defaults.
 
-        YAML is **authoritative**: a value set in YAML overrides the same key from
-        an environment variable. Multiple files are layered in order (later files
-        win), so ``from_yaml(default_yaml, local_yaml)`` lets a gitignored
-        ``local.yaml`` override the committed ``default.yaml``. Keys absent from
-        every YAML fall back to the env var (useful for secrets) then the field
-        default. Nested ``mcp_services`` / ``llm_services`` come only from YAML.
+        The **environment is authoritative**: a key set via an env var (or
+        ``.env``) overrides the same key in YAML — the 12-factor precedence, so a
+        deploy/container can override committed config without editing files.
+        Multiple YAML files are layered in order (later files win), so
+        ``from_yaml(default_yaml, local_yaml)`` lets a gitignored ``local.yaml``
+        override the committed ``default.yaml``; YAML in turn overrides the field
+        defaults. Nested ``mcp_services`` / ``llm_services`` come only from YAML
+        (env vars cannot express nested dicts).
         """
         merged: dict[str, Any] = {}
         for path in paths:
@@ -240,10 +261,14 @@ class Settings(BaseSettings):
         mcp_raw = merged.pop("mcp_services", None)
         llm_raw = merged.pop("llm_services", None)
 
-        instance = cls()  # env + field defaults — the fallback for keys not in YAML
+        instance = cls()  # env + .env + field defaults
+        # Keys the environment explicitly set (via env var or .env). pydantic only
+        # records sourced fields here — defaults are absent — so the environment
+        # wins: YAML fills only the keys the environment did NOT set.
+        env_set = set(instance.model_fields_set)
 
-        # YAML flat values are authoritative — they override env for any key they set.
-        updates: dict[str, Any] = dict(merged)
+        updates: dict[str, Any] = {k: v for k, v in merged.items() if k not in env_set}
+        # Nested structures can only come from YAML (env can't express them).
         if mcp_raw and isinstance(mcp_raw, dict):
             updates["mcp_services"] = {
                 name: MCPServiceConfig.model_validate(svc) for name, svc in mcp_raw.items()
@@ -259,13 +284,14 @@ _lock = threading.Lock()
 
 
 def get_settings() -> Settings:
-    """Return the cached Settings singleton, sourced primarily from YAML.
+    """Return the cached Settings singleton (env > YAML > field defaults).
 
-    Layering (later wins): ``config/default.yaml`` (committed, the canonical
+    YAML layering (later wins): ``config/default.yaml`` (committed, the canonical
     config) then ``config/local.yaml`` (gitignored — secrets and machine-specific
-    overrides). Both are authoritative over environment variables; env vars only
-    fill keys absent from every YAML (handy for secrets you'd rather not put in a
-    file). ``$GENIE_CONFIG_FILE`` overrides the default.yaml location.
+    overrides). Environment variables / ``.env`` are authoritative over both: an
+    env var overrides the same key in YAML (the 12-factor precedence), so a
+    deploy/container can override committed config without editing files.
+    ``$GENIE_CONFIG_FILE`` overrides the default.yaml location.
     """
     global _settings
     if _settings is None:

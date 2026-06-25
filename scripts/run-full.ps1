@@ -112,11 +112,12 @@ Start-Svc "Registry :8002"    "python -m services.registry.server"
 Start-Svc "RAG Service :8003" "python -m services.rag.server"
 Start-Sleep -Seconds 2
 
-# Sample agents. AGENT_PORT is the one per-agent value YAML can't carry (each agent
-# needs a distinct port); every other setting comes from config/*.yaml.
-Start-Svc "Weather :8010" "python -m applications.demo.weather.agent" @{ AGENT_PORT = "8010" }
-Start-Svc "Outage :8011"  "python -m applications.demo.outage.agent"  @{ AGENT_PORT = "8011" }
-Start-Svc "RAG :8012"     "python -m applications.demo.rag.agent"     @{ AGENT_PORT = "8012" }
+# Sample agents. Each agent declares its own default port in code (8010/8011/8012)
+# for stable manual testing; set AGENT_PORT here to override one. Every other
+# setting comes from config/*.yaml (env overrides YAML).
+Start-Svc "Weather :8010" "python -m applications.demo.weather.agent"
+Start-Svc "Outage :8011"  "python -m applications.demo.outage.agent"
+Start-Svc "RAG :8012"     "python -m applications.demo.rag.agent"
 Start-Sleep -Seconds 2
 
 # Gateway. Loopback bind for local use.
