@@ -67,7 +67,9 @@ META = AgentMeta(
 
 if __name__ == "__main__":
     # Run this agent as an independent service that self-registers with the
-    # Registry Service and exposes the A2A endpoint POST /a2a. Set AGENT_PORT (e.g. 8010).
+    # Registry Service and exposes the A2A endpoint POST /a2a. 8010 is a stable
+    # default for manual testing; AGENT_PORT (env) or agent_port (YAML) overrides
+    # it, and unsetting both binds an ephemeral port advertised via the registry.
     from genie.agents.server import run_agent
 
-    run_agent(WeatherAgent, META)
+    run_agent(WeatherAgent, META, port=8010)

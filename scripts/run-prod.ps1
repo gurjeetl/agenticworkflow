@@ -112,9 +112,12 @@ if (Test-Path $pidFile) {
 }
 
 # Base environment shared by every child process:
-#   PYTHONPATH       - makes `genie`, `applications`, `services`, `app` importable.
+#   PYTHONPATH        - makes `genie`, `applications`, `services`, `app` importable.
+#   ENVIRONMENT       - marks this as a production run, so the per-agent static port
+#                       default in run_agent is suppressed (prod uses the explicit
+#                       AGENT_PORT pins below, or ephemeral + discovery if removed).
 #   GENIE_CONFIG_FILE - optional prod config override (see -ConfigFile).
-$baseEnv = @{ PYTHONPATH = $src }
+$baseEnv = @{ PYTHONPATH = $src; ENVIRONMENT = "production" }
 if ($ConfigFile) {
     $cfgPath = if ([System.IO.Path]::IsPathRooted($ConfigFile)) { $ConfigFile } else { Join-Path $root $ConfigFile }
     if (-not (Test-Path $cfgPath)) {

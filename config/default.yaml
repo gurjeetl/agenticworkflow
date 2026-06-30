@@ -7,6 +7,18 @@
 # on top of this file, so it can override any value below.
 #
 # Field reference: genie.platform.config.Settings.
+#
+# NOTE on precedence: environment variables / .env now OVERRIDE YAML (12-factor).
+# A key set as an env var wins over the same key here; YAML is the baseline and
+# overrides only the in-code field defaults.
+
+# ── Runtime environment ───────────────────────────────────────────────────────
+# "development" (default) | "production" | "staging". Set ENVIRONMENT=production in
+# real deployments. In development, run_agent uses each agent's static default port
+# (8010/8011/8012) for easy manual testing; outside development that default is
+# suppressed (agents use an explicit AGENT_PORT/agent_port pin, or an ephemeral
+# port advertised via the registry).
+environment: development
 
 # ── LLM (OpenAI-compatible) ───────────────────────────────────────────────────
 # NOTE: a named backend is active below (llm_services.default), so openai_model is
@@ -92,8 +104,11 @@ rag_service_timeout_s: 3.0
 
 # ── Agent service harness ─────────────────────────────────────────────────────
 agent_host: 127.0.0.1
-# agent_port is normally set per-agent via the AGENT_PORT env var at launch
-# (run-all.ps1 / scripts), so it is intentionally NOT pinned here.
+# Port resolution (highest first): AGENT_PORT env / agent_port here → the agent's
+# own default in code (8010/8011/8012, for manual testing) → ephemeral port
+# advertised via the registry. agent_port is intentionally NOT pinned here so each
+# agent keeps its own default; uncomment to force ALL agents onto one port.
+# agent_port: 8010
 # agent_advertise_host: 127.0.0.1
 # agent_advertise_port: 8010
 

@@ -23,6 +23,7 @@ Usage (per agent module)::
 from __future__ import annotations
 
 import asyncio
+import socket
 import uuid
 from contextlib import asynccontextmanager
 
@@ -55,12 +56,17 @@ _log = get_logger(__name__)
 
 
 # --- Config helpers ---------------------------------------------------------
-def _advertised_endpoint() -> str:
-    """Base URL peers should use to reach this agent (advertise host/port override the bind)."""
+def _advertised_endpoint(port: int) -> str:
+    """Base URL peers should use to reach this agent at the given bound ``port``.
+
+    ``agent_advertise_host`` / ``agent_advertise_port`` override the bind values
+    for NAT / container scenarios where peers reach the agent at a different
+    address than it binds locally.
+    """
     _s = get_settings()
     host = _s.agent_advertise_host or _s.agent_host
-    port = _s.agent_advertise_port or _s.agent_port
-    return f"http://{host}:{port}"
+    adv_port = _s.agent_advertise_port or port
+    return f"http://{host}:{adv_port}"
 
 
 def _registry_base() -> str:
@@ -124,15 +130,16 @@ async def _heartbeat_loop(client: httpx.AsyncClient, meta: AgentMeta, interval: 
 
 
 # --- App factory ------------------------------------------------------------
-def create_agent_app(agent_cls: type, meta: AgentMeta) -> FastAPI:
+def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
     """Build the FastAPI app exposing one agent as an A2A service.
 
-    Instantiates the agent once, stamps the advertised endpoint and a fresh
-    instance id onto its meta, and wires the registry register/heartbeat/
-    deregister lifecycle plus the health, agent-card, and ``/a2a`` routes.
+    Instantiates the agent once, stamps the advertised endpoint (derived from the
+    resolved bound ``port``) and a fresh instance id onto its meta, and wires the
+    registry register/heartbeat/deregister lifecycle plus the health, agent-card,
+    and ``/a2a`` routes.
     """
     agent = agent_cls()  # loads LLM + MCP from env, once
-    meta = meta.model_copy(update={"endpoint": _advertised_endpoint(), "instance_id": uuid.uuid4().hex})
+    meta = meta.model_copy(update={"endpoint": _advertised_endpoint(port), "instance_id": uuid.uuid4().hex})
     default_interval = get_settings().registry_heartbeat_seconds
 
     @asynccontextmanager
@@ -221,7 +228,38 @@ def create_agent_app(agent_cls: type, meta: AgentMeta) -> FastAPI:
     return app
 
 
-def run_agent(agent_cls: type, meta: AgentMeta) -> None:
-    """Module ``__main__`` entry point: serve the agent app with uvicorn."""
+def run_agent(agent_cls: type, meta: AgentMeta, port: int | None = None) -> None:
+    """Module ``__main__`` entry point: serve the agent app with uvicorn.
+
+    Port resolution (highest priority first):
+
+    1. ``AGENT_PORT`` env var / ``agent_port`` in YAML (a deploy/container pin) —
+       applies in any environment.
+    2. The per-agent ``port`` passed here — a stable, memorable default for manual
+       testing (e.g. 8010). A developer affordance, not a contract: it applies
+       ONLY in development mode (``ENVIRONMENT=development``, the default), so it
+       never silently pins a port in production.
+    3. ``0`` → an OS-assigned ephemeral port. The real bound port is advertised to
+       the registry, so discovery (by ``agent_id``) keeps working with no per-agent
+       port config — the path that scales to many agents and the prod default.
+    """
     _s = get_settings()
-    uvicorn.run(create_agent_app(agent_cls, meta), host=_s.agent_host, port=_s.agent_port)
+    if _s.agent_port is not None:
+        resolved = _s.agent_port                       # explicit pin (env/YAML), any mode
+    elif _s.is_development and port is not None:
+        resolved = port                                # dev-only stable default
+    else:
+        resolved = 0                                   # ephemeral + discovery (prod/unset)
+    host = _s.agent_host
+
+    if resolved != 0:
+        uvicorn.run(create_agent_app(agent_cls, meta, resolved), host=host, port=resolved)
+        return
+
+    # Ephemeral: bind first so we can advertise the port the OS actually assigned.
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((host, 0))
+    bound_port = sock.getsockname()[1]
+    app = create_agent_app(agent_cls, meta, bound_port)
+    uvicorn.Server(uvicorn.Config(app)).run(sockets=[sock])
