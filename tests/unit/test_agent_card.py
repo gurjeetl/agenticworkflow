@@ -53,6 +53,14 @@ def test_card_declares_bearer_when_token_set(restore_settings):
     assert card.security == [{"bearer": []}]
 
 
+def test_card_streaming_follows_meta_flag(restore_settings):
+    base = restore_settings
+    cfg.override_settings(base.model_copy(update={"agent_invoke_token": None}))
+    no_stream = META.model_copy(update={"supports_streaming": False})
+    assert to_agent_card(no_stream).capabilities.streaming is False
+    assert to_agent_card(META).capabilities.streaming is True
+
+
 def test_card_provider_from_config(restore_settings):
     base = restore_settings
     cfg.override_settings(

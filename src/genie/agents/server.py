@@ -329,6 +329,8 @@ def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
             return JsonRpcResponse(id=rpc_id, result=task.model_dump(mode="json")).model_dump(mode="json")
 
         if method == METHOD_MESSAGE_STREAM:
+            if not meta.supports_streaming:  # keep the endpoint honest vs. the card
+                return _err(rpc_id, ERR_METHOD_NOT_FOUND, "agent does not support streaming")
             try:
                 in_msg = _incoming(body)
             except Exception as e:

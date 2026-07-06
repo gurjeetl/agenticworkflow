@@ -119,6 +119,21 @@ def test_message_stream_emits_lifecycle_events(client):
     assert last["status"]["state"] == "completed"
 
 
+def test_streaming_disabled_agent_hides_endpoint():
+    base = cfg.get_settings()
+    cfg.override_settings(base.model_copy(update={"agent_invoke_token": None}))
+    try:
+        no_stream_meta = META.model_copy(update={"supports_streaming": False})
+        c = TestClient(create_agent_app(StubAgent, no_stream_meta, port=0))
+        # Card advertises streaming: false ...
+        assert c.get("/.well-known/agent-card.json").json()["capabilities"]["streaming"] is False
+        # ... and the endpoint refuses message/stream with method-not-found.
+        resp = c.post("/a2a", json=_send_body(METHOD_MESSAGE_STREAM, {"location": "X"}))
+        assert resp.json()["error"]["code"] == -32601
+    finally:
+        cfg.override_settings(base)
+
+
 def test_message_send_failed_agent_returns_failed_task():
     base = cfg.get_settings()
     cfg.override_settings(base.model_copy(update={"agent_invoke_token": None}))

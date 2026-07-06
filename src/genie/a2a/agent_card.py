@@ -27,12 +27,14 @@ def to_agent_card(meta: AgentMeta) -> AgentCard:
     when an agent doesn't set them explicitly), so the card and the registry
     record always advertise identical skills.
 
-    The harness supports ``message/stream`` (SSE), so ``capabilities.streaming``
-    is advertised true. The single JSONRPC interface is echoed in
-    ``additionalInterfaces`` so a gRPC/HTTP+JSON interface can be added later
-    without a breaking change. Bearer auth is advertised only when the agent
-    actually enforces a token (see :func:`_security`) — token-free agents serve
-    a card with no security section, unchanged from before.
+    ``capabilities.streaming`` reflects ``meta.supports_streaming`` (default
+    True — the harness serves ``message/stream`` for every agent, and gates that
+    endpoint on the same flag so the card never over-promises). The single
+    JSONRPC interface is echoed in ``additionalInterfaces`` so a gRPC/HTTP+JSON
+    interface can be added later without a breaking change. Bearer auth is
+    advertised only when the agent actually enforces a token (see
+    :func:`_security`) — token-free agents serve a card with no security
+    section, unchanged from before.
     """
     settings = get_settings()
     skills = [
@@ -56,7 +58,7 @@ def to_agent_card(meta: AgentMeta) -> AgentCard:
         additionalInterfaces=[AgentInterface(url=url)] if url else [],
         provider=_provider(settings),
         documentationUrl=meta.changelog_url,
-        capabilities=AgentCapabilities(streaming=True, pushNotifications=False),
+        capabilities=AgentCapabilities(streaming=meta.supports_streaming, pushNotifications=False),
         securitySchemes=schemes,
         security=security,
         skills=skills,

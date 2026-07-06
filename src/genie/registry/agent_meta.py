@@ -54,6 +54,12 @@ class AgentMeta(BaseModel):
     status: Literal["active", "deprecated"] = "active"
     changelog_url: str | None = None
 
+    # A2A ``capabilities.streaming``. The harness serves ``message/stream`` for
+    # every agent, so this defaults True; an agent can set it False to hide the
+    # streaming endpoint — the card advertises the flag and the harness gates the
+    # endpoint on it, so the two never disagree.
+    supports_streaming: bool = True
+
     # A2A-aligned skills. Left empty by an agent, they are auto-derived from
     # capability_tags + description + input_schema (see ``_ensure_skills``) so the
     # registry record always carries the same skills the Agent Card exposes. An
