@@ -161,6 +161,14 @@ class Settings(BaseSettings):
     agent_advertise_port: int | None = None
     agent_invoke_token: str | None = None
 
+    # ── A2A protocol / Agent Card ────────────────────────────────────────────
+    # Advertised A2A protocol version. Defaults to the code's PROTOCOL_VERSION;
+    # lets ops pin a version without a code change. None → use PROTOCOL_VERSION.
+    a2a_protocol_version: str | None = None
+    # Optional AgentProvider fields surfaced on every served Agent Card.
+    agent_provider_organization: str | None = None
+    agent_provider_url: str | None = None
+
     # ── Security guard ───────────────────────────────────────────────────────
     # Master switch for the input/output content guard. When False the pipeline
     # omits BOTH guard nodes and never loads the llm-guard models — so the app

@@ -7,18 +7,34 @@ between what an agent advertises in the registry and the card it serves at
 """
 from __future__ import annotations
 
-from genie.a2a.types import AgentCapabilities, AgentCard, AgentSkill
+from genie.a2a.types import (
+    PROTOCOL_VERSION,
+    AgentCapabilities,
+    AgentCard,
+    AgentInterface,
+    AgentProvider,
+    AgentSkill,
+)
+from genie.platform.config import get_settings
 from genie.registry.agent_meta import AgentMeta
 
 
 def to_agent_card(meta: AgentMeta) -> AgentCard:
-    """Map an :class:`AgentMeta` onto an A2A :class:`AgentCard`.
+    """Map an :class:`AgentMeta` onto an A2A v1.2 :class:`AgentCard`.
 
     The card's ``skills`` are projected directly from ``meta.skills`` — the same
     list the registry stores (auto-derived from capability_tags + input_schema
     when an agent doesn't set them explicitly), so the card and the registry
     record always advertise identical skills.
+
+    The harness supports ``message/stream`` (SSE), so ``capabilities.streaming``
+    is advertised true. The single JSONRPC interface is echoed in
+    ``additionalInterfaces`` so a gRPC/HTTP+JSON interface can be added later
+    without a breaking change. Bearer auth is advertised only when the agent
+    actually enforces a token (see :func:`_security`) — token-free agents serve
+    a card with no security section, unchanged from before.
     """
+    settings = get_settings()
     skills = [
         AgentSkill(
             id=s.id,
@@ -29,14 +45,44 @@ def to_agent_card(meta: AgentMeta) -> AgentCard:
         )
         for s in meta.skills
     ]
+    url = a2a_url(meta.endpoint)
+    schemes, security = _security(settings.agent_invoke_token)
     return AgentCard(
         name=meta.agent_id,
         description=meta.description or "",
-        url=a2a_url(meta.endpoint),
+        url=url,
         version=meta.version,
-        capabilities=AgentCapabilities(streaming=False, pushNotifications=False),
+        protocolVersion=settings.a2a_protocol_version or PROTOCOL_VERSION,
+        additionalInterfaces=[AgentInterface(url=url, transport="JSONRPC")] if url else [],
+        provider=_provider(settings),
+        documentationUrl=meta.changelog_url,
+        capabilities=AgentCapabilities(streaming=True, pushNotifications=False),
+        securitySchemes=schemes,
+        security=security,
         skills=skills,
     )
+
+
+def _provider(settings) -> AgentProvider | None:
+    """Build an :class:`AgentProvider` from config, or None when unconfigured."""
+    org = settings.agent_provider_organization
+    if not org:
+        return None
+    return AgentProvider(organization=org, url=settings.agent_provider_url or "")
+
+
+def _security(
+    token: str | None,
+) -> tuple[dict[str, dict] | None, list[dict[str, list[str]]] | None]:
+    """Advertise the HTTP bearer scheme only when the agent enforces a token.
+
+    Returns ``(None, None)`` for token-free agents so their card carries no
+    security section — the pre-1.2 behavior — and a spec-shaped bearer scheme +
+    requirement otherwise, matching what ``/a2a`` actually enforces.
+    """
+    if not token:
+        return None, None
+    return {"bearer": {"type": "http", "scheme": "bearer"}}, [{"bearer": []}]
 
 
 def a2a_url(endpoint: str | None) -> str:
