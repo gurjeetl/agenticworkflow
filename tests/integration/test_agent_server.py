@@ -77,7 +77,7 @@ def test_agent_card_endpoint_is_1_2(client):
     card = resp.json()
     assert card["protocolVersion"] == "1.2"
     assert card["capabilities"]["streaming"] is True
-    assert card["securitySchemes"] is None  # token-free agent, open /a2a
+    assert "securitySchemes" not in card  # token-free agent → omitted, open /a2a
 
 
 def test_message_send_returns_completed_task(client):
@@ -117,6 +117,34 @@ def test_message_stream_emits_lifecycle_events(client):
     last = frames[-1]["result"]
     assert last["kind"] == "status-update" and last["final"] is True
     assert last["status"]["state"] == "completed"
+
+
+def test_stream_frames_have_string_context_id_without_caller_context(client):
+    # A2A Inspector sends no thread/context; the server must mint a non-null
+    # contextId on every frame (Task/status-update), else strict A2A SDK clients
+    # reject the whole SendStreamingMessageResponse union.
+    body = {
+        "jsonrpc": "2.0", "id": "rpc-x", "method": METHOD_MESSAGE_STREAM,
+        "params": {"message": {"kind": "message", "role": "user", "messageId": "m1",
+                               "parts": [{"kind": "data", "data": {"args": {"location": "Paris"}}}]}},
+    }
+    resp = client.post("/a2a", json=body)
+    frames = [json.loads(line[len("data:"):].strip()) for line in resp.text.splitlines() if line.startswith("data:")]
+    ctx_ids = {f["result"].get("contextId") for f in frames}
+    assert ctx_ids and all(isinstance(c, str) and c for c in ctx_ids)
+    assert len(ctx_ids) == 1  # same contextId across the whole stream
+    # exclude_none: success frames carry no null "error" key
+    assert all("error" not in f for f in frames)
+
+
+def test_message_send_without_context_id_mints_string(client):
+    body = {
+        "jsonrpc": "2.0", "id": "rpc-y", "method": METHOD_MESSAGE_SEND,
+        "params": {"message": {"kind": "message", "role": "user", "messageId": "m1",
+                               "parts": [{"kind": "data", "data": {"args": {"location": "Paris"}}}]}},
+    }
+    result = client.post("/a2a", json=body).json()["result"]
+    assert isinstance(result["contextId"], str) and result["contextId"]
 
 
 def test_streaming_disabled_agent_hides_endpoint():

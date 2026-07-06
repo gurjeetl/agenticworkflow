@@ -195,23 +195,37 @@ def _completed_task(meta: AgentMeta, task_id: str, context_id: str | None, resul
     )
 
 
-async def _run_task(agent, meta: AgentMeta, in_msg: Message) -> Task:
+def _resolve_ids(in_msg: Message) -> tuple[str, str]:
+    """Resolve the ``(task_id, context_id)`` for an inbound message.
+
+    Both are required, non-null strings on the A2A ``Task`` and streaming events,
+    so when the caller supplies neither (e.g. the A2A Inspector, which sends no
+    thread/context), the server mints them — matching the spec's "server assigns
+    a contextId for a new interaction" rule.
+    """
+    meta_in = in_msg.metadata or {}
+    task_id = meta_in.get("task_id") or in_msg.taskId or uuid.uuid4().hex
+    context_id = meta_in.get("thread_id") or in_msg.contextId or uuid.uuid4().hex
+    return task_id, context_id
+
+
+async def _run_task(agent, meta: AgentMeta, in_msg: Message, task_id: str, context_id: str) -> Task:
     """Run the agent for one inbound Message and return its terminal Task.
 
     Rebuilds the same narrow ``AgentState`` the pre-1.2 path used (via
     ``build_task_state``) and runs the synchronous ``agent.run`` on a worker
     thread so the event loop stays free to service concurrent ``tasks/get`` and
-    streaming requests.
+    streaming requests. ``task_id``/``context_id`` are resolved once by the
+    caller (:func:`_resolve_ids`) so a stream's events and its terminal task all
+    carry the same ids.
     """
     meta_in = in_msg.metadata or {}
     args = (get_data(in_msg) or {}).get("args") or {}
-    task_id = meta_in.get("task_id") or in_msg.taskId or uuid.uuid4().hex
-    context_id = meta_in.get("thread_id") or in_msg.contextId
     state = build_task_state(
         task_id=task_id,
         agent_id=meta_in.get("agent_id") or meta.agent_id,
         args=args,
-        thread_id=context_id or "",
+        thread_id=context_id,
         run_id=meta_in.get("run_id") or "",
         blackboard=meta_in.get("blackboard") or {},
     )
@@ -219,10 +233,21 @@ async def _run_task(agent, meta: AgentMeta, in_msg: Message) -> Task:
     return _completed_task(meta, task_id, context_id, result_state)
 
 
+def _rpc_result(rpc_id, payload) -> dict:
+    """Serialize a JSON-RPC success response, dropping null fields.
+
+    ``exclude_none`` keeps the wire payload strict-validator-clean for external
+    A2A SDK clients: no ``error: null`` on success frames and no null optional
+    fields (e.g. ``timestamp``, empty ``artifacts``) that trip union validation.
+    """
+    return JsonRpcResponse(id=rpc_id, result=payload.model_dump(mode="json", exclude_none=True)).model_dump(
+        mode="json", exclude_none=True
+    )
+
+
 def _sse(rpc_id, payload) -> str:
     """Frame one JSON-RPC result as a Server-Sent Events ``data:`` block."""
-    body = JsonRpcResponse(id=rpc_id, result=payload.model_dump(mode="json")).model_dump(mode="json")
-    return f"data: {json.dumps(body)}\n\n"
+    return f"data: {json.dumps(_rpc_result(rpc_id, payload))}\n\n"
 
 
 # --- App factory ------------------------------------------------------------
@@ -274,11 +299,13 @@ def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
     async def agent_card() -> dict:
         """Formal A2A discovery document. Routing goes through the Registry, but
         the card is served here too for A2A interoperability."""
-        return to_agent_card(meta).model_dump(mode="json")
+        return to_agent_card(meta).model_dump(mode="json", exclude_none=True)
 
     def _err(rpc_id, code: int, message: str) -> dict:
         """Build a JSON-RPC error-response dict for a request id."""
-        return JsonRpcResponse(id=rpc_id, error=JsonRpcError(code=code, message=message)).model_dump(mode="json")
+        return JsonRpcResponse(id=rpc_id, error=JsonRpcError(code=code, message=message)).model_dump(
+            mode="json", exclude_none=True
+        )
 
     def _incoming(body: dict) -> Message:
         """Parse the inbound A2A Message from a JSON-RPC request body (raises on bad input)."""
@@ -292,14 +319,12 @@ def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
         (``final=true``). Agents run synchronously, so these are lifecycle events,
         not token-level deltas. The terminal Task is stored for later ``tasks/get``.
         """
-        meta_in = in_msg.metadata or {}
-        task_id = meta_in.get("task_id") or in_msg.taskId or uuid.uuid4().hex
-        context_id = meta_in.get("thread_id") or in_msg.contextId
+        task_id, context_id = _resolve_ids(in_msg)
         submitted = Task(id=task_id, contextId=context_id, status=TaskStatus(state=TaskState.submitted))
         yield _sse(rpc_id, submitted)
         yield _sse(rpc_id, TaskStatusUpdateEvent(taskId=task_id, contextId=context_id, status=TaskStatus(state=TaskState.working)))
 
-        task = await _run_task(agent, meta, in_msg)
+        task = await _run_task(agent, meta, in_msg, task_id, context_id)
         tasks.put(task)
         if task.artifacts:
             for art in task.artifacts:
@@ -324,9 +349,9 @@ def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
                 in_msg = _incoming(body)
             except Exception as e:
                 return _err(rpc_id, ERR_INVALID_PARAMS, f"invalid message: {e}")
-            task = await _run_task(agent, meta, in_msg)
+            task = await _run_task(agent, meta, in_msg, *_resolve_ids(in_msg))
             tasks.put(task)
-            return JsonRpcResponse(id=rpc_id, result=task.model_dump(mode="json")).model_dump(mode="json")
+            return _rpc_result(rpc_id, task)
 
         if method == METHOD_MESSAGE_STREAM:
             if not meta.supports_streaming:  # keep the endpoint honest vs. the card
@@ -344,7 +369,7 @@ def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
                 return _err(rpc_id, ERR_TASK_NOT_FOUND, f"task '{task_id}' not found")
             # Runs are synchronous, so a stored task is already terminal; cancel is
             # best-effort and simply echoes the (completed/failed) task as-is.
-            return JsonRpcResponse(id=rpc_id, result=task.model_dump(mode="json")).model_dump(mode="json")
+            return _rpc_result(rpc_id, task)
 
         return _err(rpc_id, ERR_METHOD_NOT_FOUND, f"unsupported method '{method}'")
 
