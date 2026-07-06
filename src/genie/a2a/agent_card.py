@@ -53,7 +53,7 @@ def to_agent_card(meta: AgentMeta) -> AgentCard:
         url=url,
         version=meta.version,
         protocolVersion=settings.a2a_protocol_version or PROTOCOL_VERSION,
-        additionalInterfaces=[AgentInterface(url=url, transport="JSONRPC")] if url else [],
+        additionalInterfaces=[AgentInterface(url=url)] if url else [],
         provider=_provider(settings),
         documentationUrl=meta.changelog_url,
         capabilities=AgentCapabilities(streaming=True, pushNotifications=False),

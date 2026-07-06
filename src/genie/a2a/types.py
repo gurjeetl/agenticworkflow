@@ -21,6 +21,11 @@ from pydantic import BaseModel, Field
 # Single source of truth for the advertised A2A protocol version.
 PROTOCOL_VERSION = "1.2"
 
+# The only A2A transport this framework serves. The spec also defines "GRPC" and
+# "HTTP+JSON"; those aren't implemented, but ``additionalInterfaces`` is shaped so
+# one could be advertised later without a breaking change.
+TRANSPORT_JSONRPC = "JSONRPC"
+
 # --- JSON-RPC method names --------------------------------------------------
 METHOD_MESSAGE_SEND = "message/send"
 METHOD_MESSAGE_STREAM = "message/stream"
@@ -116,7 +121,7 @@ class AgentInterface(BaseModel):
     """
 
     url: str
-    transport: str = "JSONRPC"
+    transport: str = TRANSPORT_JSONRPC
 
 
 class AgentCard(BaseModel):
@@ -127,7 +132,7 @@ class AgentCard(BaseModel):
     url: str
     version: str = "1.0.0"
     protocolVersion: str = PROTOCOL_VERSION
-    preferredTransport: str = "JSONRPC"
+    preferredTransport: str = TRANSPORT_JSONRPC
     additionalInterfaces: list[AgentInterface] = Field(default_factory=list)
     provider: AgentProvider | None = None
     iconUrl: str | None = None
