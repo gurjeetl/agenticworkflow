@@ -27,20 +27,31 @@ import socket
 import uuid
 from contextlib import asynccontextmanager
 
+import json
 import httpx
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import StreamingResponse
 
 from genie.a2a.agent_card import to_agent_card
 from genie.a2a.types import (
-    ERR_AGENT_EXECUTION,
     ERR_INVALID_PARAMS,
     ERR_METHOD_NOT_FOUND,
+    ERR_TASK_NOT_FOUND,
     METHOD_MESSAGE_SEND,
+    METHOD_MESSAGE_STREAM,
+    METHOD_TASKS_CANCEL,
+    METHOD_TASKS_GET,
+    Artifact,
     JsonRpcError,
     JsonRpcResponse,
     Message,
+    Task,
+    TaskArtifactUpdateEvent,
+    TaskState,
+    TaskStatus,
+    TaskStatusUpdateEvent,
     data_part,
     get_data,
     text_part,
@@ -48,6 +59,8 @@ from genie.a2a.types import (
 from genie.observability import configure_logging, get_logger
 from genie.platform.config import get_settings
 from genie.agents.task_state import build_task_state
+from genie.agents.task_store import TaskStore
+from genie.application.state import AgentState
 from genie.registry.agent_meta import AgentMeta
 
 load_dotenv()
@@ -129,6 +142,89 @@ async def _heartbeat_loop(client: httpx.AsyncClient, meta: AgentMeta, interval: 
             await _register(client, meta)  # self-heal: registry restarted/unreachable
 
 
+# --- Task execution helpers -------------------------------------------------
+def _agent_message(meta: AgentMeta, task_id: str, context_id: str | None, result_state: AgentState) -> Message:
+    """Build the agent-role reply Message from a finished AgentState.
+
+    A TextPart carries ``final_output``; an optional DataPart carries a
+    structured ``view`` — the same shape the pre-1.2 ``message/send`` returned.
+    """
+    parts = [text_part(result_state.get("final_output") or "")]
+    view = result_state.get("view")
+    if view:
+        parts.append(data_part({"view": view}))
+    return Message(
+        role="agent",
+        messageId=uuid.uuid4().hex,
+        taskId=task_id,
+        contextId=context_id,
+        parts=parts,
+        metadata={"agent_id": meta.agent_id},
+    )
+
+
+def _completed_task(meta: AgentMeta, task_id: str, context_id: str | None, result_state: AgentState) -> Task:
+    """Wrap a finished AgentState into a terminal A2A :class:`Task`.
+
+    ``error`` on the state → a ``failed`` task carrying the error text; otherwise
+    a ``completed`` task whose ``status.message`` is the agent's reply, with the
+    structured ``view`` (when present) also surfaced as an artifact.
+    """
+    error = result_state.get("error")
+    if error:
+        fail_msg = Message(
+            role="agent",
+            messageId=uuid.uuid4().hex,
+            taskId=task_id,
+            contextId=context_id,
+            parts=[text_part(str(error))],
+            metadata={"agent_id": meta.agent_id},
+        )
+        return Task(id=task_id, contextId=context_id, status=TaskStatus(state=TaskState.failed, message=fail_msg))
+
+    msg = _agent_message(meta, task_id, context_id, result_state)
+    artifacts = None
+    view = result_state.get("view")
+    if view:
+        artifacts = [Artifact(artifactId=uuid.uuid4().hex, name="view", parts=[data_part({"view": view})])]
+    return Task(
+        id=task_id,
+        contextId=context_id,
+        status=TaskStatus(state=TaskState.completed, message=msg),
+        artifacts=artifacts,
+    )
+
+
+async def _run_task(agent, meta: AgentMeta, in_msg: Message) -> Task:
+    """Run the agent for one inbound Message and return its terminal Task.
+
+    Rebuilds the same narrow ``AgentState`` the pre-1.2 path used (via
+    ``build_task_state``) and runs the synchronous ``agent.run`` on a worker
+    thread so the event loop stays free to service concurrent ``tasks/get`` and
+    streaming requests.
+    """
+    meta_in = in_msg.metadata or {}
+    args = (get_data(in_msg) or {}).get("args") or {}
+    task_id = meta_in.get("task_id") or in_msg.taskId or uuid.uuid4().hex
+    context_id = meta_in.get("thread_id") or in_msg.contextId
+    state = build_task_state(
+        task_id=task_id,
+        agent_id=meta_in.get("agent_id") or meta.agent_id,
+        args=args,
+        thread_id=context_id or "",
+        run_id=meta_in.get("run_id") or "",
+        blackboard=meta_in.get("blackboard") or {},
+    )
+    result_state = await asyncio.to_thread(agent.run, state)
+    return _completed_task(meta, task_id, context_id, result_state)
+
+
+def _sse(rpc_id, payload) -> str:
+    """Frame one JSON-RPC result as a Server-Sent Events ``data:`` block."""
+    body = JsonRpcResponse(id=rpc_id, result=payload.model_dump(mode="json")).model_dump(mode="json")
+    return f"data: {json.dumps(body)}\n\n"
+
+
 # --- App factory ------------------------------------------------------------
 def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
     """Build the FastAPI app exposing one agent as an A2A service.
@@ -141,6 +237,7 @@ def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
     agent = agent_cls()  # loads LLM + MCP from env, once
     meta = meta.model_copy(update={"endpoint": _advertised_endpoint(port), "instance_id": uuid.uuid4().hex})
     default_interval = get_settings().registry_heartbeat_seconds
+    tasks = TaskStore()  # in-process Task store backing tasks/get + tasks/cancel
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -169,61 +266,87 @@ def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
         """Liveness probe identifying this agent and its current instance."""
         return {"status": "ok", "agent_id": meta.agent_id, "instance_id": meta.instance_id}
 
+    # Both well-known paths: `agent.json` (older A2A) and `agent-card.json` (A2A
+    # v0.3+, used by tools like the A2A Inspector). Serving both keeps every client
+    # version interoperable.
     @app.get("/.well-known/agent.json")
+    @app.get("/.well-known/agent-card.json")
     async def agent_card() -> dict:
         """Formal A2A discovery document. Routing goes through the Registry, but
         the card is served here too for A2A interoperability."""
         return to_agent_card(meta).model_dump(mode="json")
 
-    @app.post("/a2a", dependencies=[Depends(require_a2a_auth)])
-    async def a2a(body: dict) -> dict:
-        """A2A JSON-RPC 2.0 endpoint. Handles ``message/send``.
+    def _err(rpc_id, code: int, message: str) -> dict:
+        """Build a JSON-RPC error-response dict for a request id."""
+        return JsonRpcResponse(id=rpc_id, error=JsonRpcError(code=code, message=message)).model_dump(mode="json")
 
-        Args travel in a request DataPart (``{"args": {...}}``); invocation
-        context (task_id, run_id, thread_id, blackboard) travels in the message
-        ``metadata``. The reply is an agent-role Message: a TextPart with the
-        agent's answer and an optional DataPart carrying a structured ``view``.
+    def _incoming(body: dict) -> Message:
+        """Parse the inbound A2A Message from a JSON-RPC request body (raises on bad input)."""
+        return Message.model_validate((body.get("params") or {}).get("message") or {})
+
+    async def _stream_events(rpc_id, in_msg: Message):
+        """Yield the A2A SSE frames for one ``message/stream`` invocation.
+
+        Emits ``submitted`` → ``working`` → run the agent → an artifact frame (when
+        the reply carries content) → a terminal ``completed``/``failed`` status
+        (``final=true``). Agents run synchronously, so these are lifecycle events,
+        not token-level deltas. The terminal Task is stored for later ``tasks/get``.
+        """
+        meta_in = in_msg.metadata or {}
+        task_id = meta_in.get("task_id") or in_msg.taskId or uuid.uuid4().hex
+        context_id = meta_in.get("thread_id") or in_msg.contextId
+        submitted = Task(id=task_id, contextId=context_id, status=TaskStatus(state=TaskState.submitted))
+        yield _sse(rpc_id, submitted)
+        yield _sse(rpc_id, TaskStatusUpdateEvent(taskId=task_id, contextId=context_id, status=TaskStatus(state=TaskState.working)))
+
+        task = await _run_task(agent, meta, in_msg)
+        tasks.put(task)
+        if task.artifacts:
+            for art in task.artifacts:
+                yield _sse(rpc_id, TaskArtifactUpdateEvent(taskId=task.id, contextId=task.contextId, artifact=art, lastChunk=True))
+        yield _sse(rpc_id, TaskStatusUpdateEvent(taskId=task.id, contextId=task.contextId, status=task.status, final=True))
+
+    @app.post("/a2a", dependencies=[Depends(require_a2a_auth)])
+    async def a2a(body: dict):
+        """A2A v1.2 JSON-RPC 2.0 endpoint.
+
+        Handles ``message/send`` (returns a terminal :class:`Task`),
+        ``message/stream`` (SSE stream of task lifecycle events), ``tasks/get``
+        and ``tasks/cancel``. Args travel in a request DataPart
+        (``{"args": {...}}``); invocation context (task_id, run_id, thread_id,
+        blackboard) travels in the message ``metadata``.
         """
         rpc_id = body.get("id")
+        method = body.get("method")
 
-        def _err(code: int, message: str) -> dict:
-            """Build a JSON-RPC error-response dict for the current request id."""
-            return JsonRpcResponse(id=rpc_id, error=JsonRpcError(code=code, message=message)).model_dump(mode="json")
+        if method == METHOD_MESSAGE_SEND:
+            try:
+                in_msg = _incoming(body)
+            except Exception as e:
+                return _err(rpc_id, ERR_INVALID_PARAMS, f"invalid message: {e}")
+            task = await _run_task(agent, meta, in_msg)
+            tasks.put(task)
+            return JsonRpcResponse(id=rpc_id, result=task.model_dump(mode="json")).model_dump(mode="json")
 
-        if body.get("method") != METHOD_MESSAGE_SEND:
-            return _err(ERR_METHOD_NOT_FOUND, f"unsupported method '{body.get('method')}'")
-        try:
-            in_msg = Message.model_validate((body.get("params") or {}).get("message") or {})
-        except Exception as e:  # malformed message payload
-            return _err(ERR_INVALID_PARAMS, f"invalid message: {e}")
+        if method == METHOD_MESSAGE_STREAM:
+            if not meta.supports_streaming:  # keep the endpoint honest vs. the card
+                return _err(rpc_id, ERR_METHOD_NOT_FOUND, "agent does not support streaming")
+            try:
+                in_msg = _incoming(body)
+            except Exception as e:
+                return _err(rpc_id, ERR_INVALID_PARAMS, f"invalid message: {e}")
+            return StreamingResponse(_stream_events(rpc_id, in_msg), media_type="text/event-stream")
 
-        meta_in = in_msg.metadata or {}
-        args = (get_data(in_msg) or {}).get("args") or {}
-        state = build_task_state(
-            task_id=meta_in.get("task_id") or in_msg.taskId or "",
-            agent_id=meta_in.get("agent_id") or meta.agent_id,
-            args=args,
-            thread_id=meta_in.get("thread_id") or in_msg.contextId or "",
-            run_id=meta_in.get("run_id") or "",
-            blackboard=meta_in.get("blackboard") or {},
-        )
-        result_state = await asyncio.to_thread(agent.run, state)
-        if result_state.get("error"):
-            return _err(ERR_AGENT_EXECUTION, str(result_state["error"]))
+        if method in (METHOD_TASKS_GET, METHOD_TASKS_CANCEL):
+            task_id = (body.get("params") or {}).get("id")
+            task = tasks.get(task_id) if task_id else None
+            if task is None:
+                return _err(rpc_id, ERR_TASK_NOT_FOUND, f"task '{task_id}' not found")
+            # Runs are synchronous, so a stored task is already terminal; cancel is
+            # best-effort and simply echoes the (completed/failed) task as-is.
+            return JsonRpcResponse(id=rpc_id, result=task.model_dump(mode="json")).model_dump(mode="json")
 
-        parts = [text_part(result_state.get("final_output") or "")]
-        view = result_state.get("view")
-        if view:
-            parts.append(data_part({"view": view}))
-        out_msg = Message(
-            role="agent",
-            messageId=uuid.uuid4().hex,
-            taskId=meta_in.get("task_id"),
-            contextId=meta_in.get("thread_id"),
-            parts=parts,
-            metadata={"agent_id": meta.agent_id},
-        )
-        return JsonRpcResponse(id=rpc_id, result=out_msg.model_dump(mode="json")).model_dump(mode="json")
+        return _err(rpc_id, ERR_METHOD_NOT_FOUND, f"unsupported method '{method}'")
 
     return app
 

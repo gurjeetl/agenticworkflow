@@ -1,20 +1,32 @@
-"""Formal A2A (Agent2Agent) protocol support — JSON-RPC ``message/send`` and
-Agent Cards — layered on top of this framework's centralized Registry discovery.
+"""Formal A2A (Agent2Agent) v1.2 protocol support — JSON-RPC ``message/send``,
+the Task lifecycle, ``message/stream`` (SSE) and Agent Cards — layered on top of
+this framework's centralized Registry discovery.
 """
 from genie.a2a.agent_card import a2a_url, to_agent_card
 from genie.a2a.client import A2AClient, A2AError
 from genie.a2a.types import (
     METHOD_MESSAGE_SEND,
+    METHOD_MESSAGE_STREAM,
+    METHOD_TASKS_CANCEL,
+    METHOD_TASKS_GET,
+    PROTOCOL_VERSION,
     AgentCard,
+    Artifact,
     DataPart,
     JsonRpcError,
     JsonRpcRequest,
     JsonRpcResponse,
     Message,
+    Task,
+    TaskArtifactUpdateEvent,
+    TaskState,
+    TaskStatus,
+    TaskStatusUpdateEvent,
     TextPart,
     data_part,
     get_data,
     get_text,
+    task_final_message,
     text_part,
 )
 
@@ -22,17 +34,28 @@ __all__ = [
     "A2AClient",
     "A2AError",
     "AgentCard",
+    "Artifact",
     "DataPart",
     "JsonRpcError",
     "JsonRpcRequest",
     "JsonRpcResponse",
     "METHOD_MESSAGE_SEND",
+    "METHOD_MESSAGE_STREAM",
+    "METHOD_TASKS_CANCEL",
+    "METHOD_TASKS_GET",
+    "PROTOCOL_VERSION",
     "Message",
+    "Task",
+    "TaskArtifactUpdateEvent",
+    "TaskState",
+    "TaskStatus",
+    "TaskStatusUpdateEvent",
     "TextPart",
     "a2a_url",
     "data_part",
     "get_data",
     "get_text",
+    "task_final_message",
     "text_part",
     "to_agent_card",
 ]

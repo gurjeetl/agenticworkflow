@@ -208,6 +208,7 @@ class Executor(Observable):
             span.set_attribute("agent.version", meta.version)
             span.set_attribute("agent.endpoint", str(meta.endpoint))
             span.set_attribute("agent.transport", "a2a/json-rpc")
+            span.set_attribute("a2a.protocol", "1.2")
             span.set_attribute("exec.wave", wave_idx)
             span.set_attribute("task.id", task.id)
             span.set_inputs({"args": resolved_args, "args_template": task.args})
