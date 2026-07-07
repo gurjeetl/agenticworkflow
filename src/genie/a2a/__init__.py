@@ -1,6 +1,8 @@
-"""Formal A2A (Agent2Agent) v1.2 protocol support — JSON-RPC ``message/send``,
-the Task lifecycle, ``message/stream`` (SSE) and Agent Cards — layered on top of
-this framework's centralized Registry discovery.
+"""Formal A2A (Agent2Agent) protocol support — built on the official ``a2a-sdk``
+JSON models — layered on top of this framework's centralized Registry discovery.
+
+Wire types come from ``a2a.compat.v0_3.types`` (the JSON binding of protocol 1.0.0);
+see :mod:`genie.a2a.types`.
 """
 from genie.a2a.agent_card import a2a_url, to_agent_card
 from genie.a2a.client import A2AClient, A2AError
@@ -13,10 +15,9 @@ from genie.a2a.types import (
     AgentCard,
     Artifact,
     DataPart,
-    JsonRpcError,
-    JsonRpcRequest,
-    JsonRpcResponse,
+    JSONRPCErrorResponse,
     Message,
+    Role,
     Task,
     TaskArtifactUpdateEvent,
     TaskState,
@@ -36,15 +37,14 @@ __all__ = [
     "AgentCard",
     "Artifact",
     "DataPart",
-    "JsonRpcError",
-    "JsonRpcRequest",
-    "JsonRpcResponse",
+    "JSONRPCErrorResponse",
     "METHOD_MESSAGE_SEND",
     "METHOD_MESSAGE_STREAM",
     "METHOD_TASKS_CANCEL",
     "METHOD_TASKS_GET",
     "PROTOCOL_VERSION",
     "Message",
+    "Role",
     "Task",
     "TaskArtifactUpdateEvent",
     "TaskState",

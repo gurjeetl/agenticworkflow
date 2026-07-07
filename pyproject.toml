@@ -43,6 +43,7 @@ dependencies = [
     "psycopg2-binary",
     # --- RAG service boundary (shared wire contracts; editable local package) ---
     "genie-rag-contracts",
+    "a2a-sdk>=1.1.0",
 ]
 
 [project.optional-dependencies]
