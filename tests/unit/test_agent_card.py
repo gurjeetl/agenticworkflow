@@ -1,4 +1,4 @@
-"""Unit tests for the AgentMeta → A2A v1.2 AgentCard projection."""
+"""Unit tests for the AgentMeta → a2a-sdk AgentCard projection."""
 from __future__ import annotations
 
 import pytest
@@ -26,22 +26,22 @@ def restore_settings():
     cfg.override_settings(base)
 
 
-def test_card_advertises_1_2_streaming_and_interface(restore_settings):
+def test_card_advertises_sdk_native_version_and_interface(restore_settings):
     base = restore_settings
     cfg.override_settings(base.model_copy(update={"agent_invoke_token": None}))
     card = to_agent_card(META)
-    assert card.protocolVersion == "1.2"
+    assert card.protocol_version == "0.3.0"
     assert card.capabilities.streaming is True
-    assert card.capabilities.pushNotifications is False
-    assert [i.transport for i in card.additionalInterfaces] == ["JSONRPC"]
-    assert card.additionalInterfaces[0].url.endswith("/a2a")
+    assert card.capabilities.push_notifications is False
+    assert [i.transport for i in card.additional_interfaces] == ["JSONRPC"]
+    assert card.additional_interfaces[0].url.endswith("/a2a")
 
 
 def test_card_omits_security_without_token(restore_settings):
     base = restore_settings
     cfg.override_settings(base.model_copy(update={"agent_invoke_token": None}))
     card = to_agent_card(META)
-    assert card.securitySchemes is None
+    assert card.security_schemes is None
     assert card.security is None
 
 
@@ -49,8 +49,9 @@ def test_card_declares_bearer_when_token_set(restore_settings):
     base = restore_settings
     cfg.override_settings(base.model_copy(update={"agent_invoke_token": "secret"}))
     card = to_agent_card(META)
-    assert card.securitySchemes == {"bearer": {"type": "http", "scheme": "bearer"}}
-    assert card.security == [{"bearer": []}]
+    dumped = card.model_dump(mode="json", by_alias=True, exclude_none=True)
+    assert dumped["securitySchemes"] == {"bearer": {"type": "http", "scheme": "bearer"}}
+    assert dumped["security"] == [{"bearer": []}]
 
 
 def test_card_streaming_follows_meta_flag(restore_settings):

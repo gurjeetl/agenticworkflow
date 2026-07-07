@@ -19,12 +19,10 @@ import httpx
 from genie.a2a.agent_card import a2a_url
 from genie.platform.config import get_settings
 from genie.a2a.types import (
-    ERR_AGENT_EXECUTION,
     METHOD_MESSAGE_SEND,
     METHOD_MESSAGE_STREAM,
-    JsonRpcRequest,
-    JsonRpcResponse,
     Message,
+    Role,
     Task,
     TaskState,
     data_part,
@@ -77,14 +75,17 @@ class A2AClient:
         sla_ms: int,
         *,
         method: str = METHOD_MESSAGE_SEND,
-    ) -> JsonRpcRequest:
-        """Wrap args + invocation context into a JSON-RPC request (``message/send`` or ``message/stream``)."""
+    ) -> dict:
+        """Wrap args + invocation context into a JSON-RPC request (``message/send`` or ``message/stream``).
+
+        The a2a-sdk Message serializes to the camelCase wire form via ``by_alias``.
+        """
         ctx = dict(context or {})
         message = Message(
-            role="user",
-            messageId=uuid.uuid4().hex,
-            taskId=ctx.get("task_id"),
-            contextId=ctx.get("thread_id"),
+            role=Role.user,
+            message_id=uuid.uuid4().hex,
+            task_id=ctx.get("task_id"),
+            context_id=ctx.get("thread_id"),
             parts=[data_part({"args": args or {}})],
             metadata={
                 "agent_id": agent_id,
@@ -96,34 +97,36 @@ class A2AClient:
                 "sla_ms": sla_ms,
             },
         )
-        return JsonRpcRequest(
-            id=ctx.get("task_id") or uuid.uuid4().hex,
-            method=method,
-            params={"message": message.model_dump(mode="json")},
-        )
+        return {
+            "jsonrpc": "2.0",
+            "id": ctx.get("task_id") or uuid.uuid4().hex,
+            "method": method,
+            "params": {"message": message.model_dump(mode="json", by_alias=True, exclude_none=True)},
+        }
 
     @staticmethod
     def _parse_response(data: Any) -> Message:
         """Unwrap a JSON-RPC response to its reply Message, raising on any error.
 
-        A2A v1.2 ``message/send`` returns either a ``Message`` or a ``Task``. A
-        completed Task is unwrapped to its final Message (via
-        :func:`task_final_message`); a ``failed``/``canceled``/``rejected`` Task
-        is surfaced as an :class:`A2AError` so the caller's existing error/retry
-        handling (Executor, ``call_peer``) is preserved exactly as under 0.2.5.
+        A2A ``message/send`` returns either a ``Message`` or a ``Task``. A completed
+        Task is unwrapped to its final Message (via :func:`task_final_message`); a
+        ``failed``/``canceled``/``rejected`` Task is surfaced as an :class:`A2AError`
+        so the caller's existing error/retry handling (Executor, ``call_peer``) is
+        preserved exactly.
         """
-        rpc = JsonRpcResponse.model_validate(data)
-        if rpc.error is not None:
-            raise A2AError(rpc.error.message, code=rpc.error.code)
-        if not rpc.result:
+        error = data.get("error")
+        if error:
+            raise A2AError(error.get("message", "A2A error"), code=error.get("code"))
+        result = data.get("result")
+        if not result:
             raise A2AError("A2A response had neither result nor error")
-        if rpc.result.get("kind") == "task":
-            task = Task.model_validate(rpc.result)
+        if result.get("kind") == "task":
+            task = Task.model_validate(result)
             if task.status.state in (TaskState.failed, TaskState.canceled, TaskState.rejected):
                 detail = get_text(task.status.message) if task.status.message else task.status.state.value
-                raise A2AError(f"agent task {task.status.state.value}: {detail}", code=ERR_AGENT_EXECUTION)
+                raise A2AError(f"agent task {task.status.state.value}: {detail}")
             return task_final_message(task)
-        return Message.model_validate(rpc.result)
+        return Message.model_validate(result)
 
     # ------------------------------------------------------------------
     async def send(
@@ -141,8 +144,7 @@ class A2AClient:
         caller (Executor / peer agent) can decide how to record the failure.
         """
         url = self._resolve_url(agent_id)
-        req = self._build_request(agent_id, args, context, sla_ms)
-        payload = req.model_dump(mode="json")
+        payload = self._build_request(agent_id, args, context, sla_ms)
         timeout = httpx.Timeout(sla_ms / 1000.0)
 
         async def _post(client: httpx.AsyncClient) -> Message:
@@ -174,8 +176,7 @@ class A2AClient:
         :class:`A2AError` on transport failure or a JSON-RPC error frame.
         """
         url = self._resolve_url(agent_id)
-        req = self._build_request(agent_id, args, context, sla_ms, method=METHOD_MESSAGE_STREAM)
-        payload = req.model_dump(mode="json")
+        payload = self._build_request(agent_id, args, context, sla_ms, method=METHOD_MESSAGE_STREAM)
         headers = {**self._headers(), "Accept": "text/event-stream"}
         timeout = httpx.Timeout(sla_ms / 1000.0)
         async with httpx.AsyncClient() as client:

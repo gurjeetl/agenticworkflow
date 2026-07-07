@@ -1,9 +1,10 @@
-"""Integration tests for the A2A v1.2 agent harness (create_agent_app).
+"""Integration tests for the A2A agent harness (create_agent_app) on a2a-sdk types.
 
-Uses a stub agent (no LLM/MCP) so the tests exercise only the A2A surface:
-card discovery, message/send → Task, tasks/get, and message/stream (SSE).
-TestClient is used without the lifespan context manager, so no Registry
-connection is attempted — proving an agent is independently testable.
+Uses a stub agent (no LLM/MCP) so the tests exercise only the A2A surface: card
+discovery, message/send → Task, tasks/get, tasks/cancel, and message/stream (SSE).
+Wire assertions use the SDK's camelCase JSON; error codes are the A2A standard ones.
+TestClient is used without the lifespan context manager, so no Registry connection
+is attempted — proving an agent is independently testable.
 """
 from __future__ import annotations
 
@@ -14,7 +15,12 @@ from fastapi.testclient import TestClient
 
 import genie.platform.config as cfg
 from genie.agents.server import create_agent_app
-from genie.a2a.types import METHOD_MESSAGE_SEND, METHOD_MESSAGE_STREAM, METHOD_TASKS_GET
+from genie.a2a.types import (
+    METHOD_MESSAGE_SEND,
+    METHOD_MESSAGE_STREAM,
+    METHOD_TASKS_CANCEL,
+    METHOD_TASKS_GET,
+)
 from genie.registry.agent_meta import AgentMeta, FieldSpec
 
 
@@ -45,7 +51,10 @@ META = AgentMeta(
 )
 
 
-def _send_body(method: str, args: dict, task_id: str = "task-1") -> dict:
+def _send_body(method: str, args: dict, task_id: str | None = "task-1") -> dict:
+    metadata = {"agent_id": "stub", "thread_id": "thread-1"}
+    if task_id is not None:
+        metadata["task_id"] = task_id
     return {
         "jsonrpc": "2.0",
         "id": "rpc-1",
@@ -56,7 +65,7 @@ def _send_body(method: str, args: dict, task_id: str = "task-1") -> dict:
                 "role": "user",
                 "messageId": "m1",
                 "parts": [{"kind": "data", "data": {"args": args}}],
-                "metadata": {"task_id": task_id, "agent_id": "stub", "thread_id": "thread-1"},
+                "metadata": metadata,
             }
         },
     }
@@ -71,18 +80,15 @@ def client():
     cfg.override_settings(base)
 
 
-def test_agent_card_endpoint_is_1_2(client):
-    resp = client.get("/.well-known/agent-card.json")
-    assert resp.status_code == 200
-    card = resp.json()
-    assert card["protocolVersion"] == "1.2"
+def test_agent_card_endpoint_is_sdk_native(client):
+    card = client.get("/.well-known/agent-card.json").json()
+    assert card["protocolVersion"] == "0.3.0"
     assert card["capabilities"]["streaming"] is True
     assert "securitySchemes" not in card  # token-free agent → omitted, open /a2a
 
 
 def test_message_send_returns_completed_task(client):
-    resp = client.post("/a2a", json=_send_body(METHOD_MESSAGE_SEND, {"location": "Paris"}))
-    result = resp.json()["result"]
+    result = client.post("/a2a", json=_send_body(METHOD_MESSAGE_SEND, {"location": "Paris"})).json()["result"]
     assert result["kind"] == "task"
     assert result["status"]["state"] == "completed"
     text = "".join(p.get("text", "") for p in result["status"]["message"]["parts"])
@@ -91,20 +97,25 @@ def test_message_send_returns_completed_task(client):
 
 def test_tasks_get_returns_stored_task(client):
     client.post("/a2a", json=_send_body(METHOD_MESSAGE_SEND, {"location": "Paris"}, task_id="task-xyz"))
-    resp = client.post("/a2a", json={"jsonrpc": "2.0", "id": "2", "method": METHOD_TASKS_GET, "params": {"id": "task-xyz"}})
-    result = resp.json()["result"]
+    result = client.post("/a2a", json={"jsonrpc": "2.0", "id": "2", "method": METHOD_TASKS_GET, "params": {"id": "task-xyz"}}).json()["result"]
     assert result["id"] == "task-xyz"
     assert result["status"]["state"] == "completed"
 
 
-def test_tasks_get_unknown_id_errors(client):
+def test_tasks_get_unknown_id_returns_task_not_found(client):
     resp = client.post("/a2a", json={"jsonrpc": "2.0", "id": "2", "method": METHOD_TASKS_GET, "params": {"id": "nope"}})
-    assert resp.json()["error"]["code"] == -32002
+    assert resp.json()["error"]["code"] == -32001  # TaskNotFoundError
 
 
-def test_unknown_method_errors(client):
+def test_tasks_cancel_terminal_returns_not_cancelable(client):
+    client.post("/a2a", json=_send_body(METHOD_MESSAGE_SEND, {"location": "Paris"}, task_id="task-c"))
+    resp = client.post("/a2a", json={"jsonrpc": "2.0", "id": "3", "method": METHOD_TASKS_CANCEL, "params": {"id": "task-c"}})
+    assert resp.json()["error"]["code"] == -32002  # TaskNotCancelableError (synchronous task already terminal)
+
+
+def test_unknown_method_returns_method_not_found(client):
     resp = client.post("/a2a", json={"jsonrpc": "2.0", "id": "2", "method": "bogus/thing", "params": {}})
-    assert resp.json()["error"]["code"] == -32601
+    assert resp.json()["error"]["code"] == -32601  # MethodNotFoundError
 
 
 def test_message_stream_emits_lifecycle_events(client):
@@ -120,29 +131,18 @@ def test_message_stream_emits_lifecycle_events(client):
 
 
 def test_stream_frames_have_string_context_id_without_caller_context(client):
-    # A2A Inspector sends no thread/context; the server must mint a non-null
-    # contextId on every frame (Task/status-update), else strict A2A SDK clients
-    # reject the whole SendStreamingMessageResponse union.
-    body = {
-        "jsonrpc": "2.0", "id": "rpc-x", "method": METHOD_MESSAGE_STREAM,
-        "params": {"message": {"kind": "message", "role": "user", "messageId": "m1",
-                               "parts": [{"kind": "data", "data": {"args": {"location": "Paris"}}}]}},
-    }
-    resp = client.post("/a2a", json=body)
-    frames = [json.loads(line[len("data:"):].strip()) for line in resp.text.splitlines() if line.startswith("data:")]
+    body = _send_body(METHOD_MESSAGE_STREAM, {"location": "Paris"}, task_id=None)
+    body["params"]["message"]["metadata"].pop("thread_id")
+    frames = [json.loads(line[len("data:"):].strip()) for line in client.post("/a2a", json=body).text.splitlines() if line.startswith("data:")]
     ctx_ids = {f["result"].get("contextId") for f in frames}
     assert ctx_ids and all(isinstance(c, str) and c for c in ctx_ids)
     assert len(ctx_ids) == 1  # same contextId across the whole stream
-    # exclude_none: success frames carry no null "error" key
-    assert all("error" not in f for f in frames)
+    assert all("error" not in f for f in frames)  # exclude_none: no null error on success frames
 
 
 def test_message_send_without_context_id_mints_string(client):
-    body = {
-        "jsonrpc": "2.0", "id": "rpc-y", "method": METHOD_MESSAGE_SEND,
-        "params": {"message": {"kind": "message", "role": "user", "messageId": "m1",
-                               "parts": [{"kind": "data", "data": {"args": {"location": "Paris"}}}]}},
-    }
+    body = _send_body(METHOD_MESSAGE_SEND, {"location": "Paris"}, task_id=None)
+    body["params"]["message"]["metadata"].pop("thread_id")
     result = client.post("/a2a", json=body).json()["result"]
     assert isinstance(result["contextId"], str) and result["contextId"]
 
@@ -153,11 +153,9 @@ def test_streaming_disabled_agent_hides_endpoint():
     try:
         no_stream_meta = META.model_copy(update={"supports_streaming": False})
         c = TestClient(create_agent_app(StubAgent, no_stream_meta, port=0))
-        # Card advertises streaming: false ...
         assert c.get("/.well-known/agent-card.json").json()["capabilities"]["streaming"] is False
-        # ... and the endpoint refuses message/stream with method-not-found.
         resp = c.post("/a2a", json=_send_body(METHOD_MESSAGE_STREAM, {"location": "X"}))
-        assert resp.json()["error"]["code"] == -32601
+        assert resp.json()["error"]["code"] == -32004  # UnsupportedOperationError
     finally:
         cfg.override_settings(base)
 
@@ -167,8 +165,7 @@ def test_message_send_failed_agent_returns_failed_task():
     cfg.override_settings(base.model_copy(update={"agent_invoke_token": None}))
     try:
         c = TestClient(create_agent_app(FailAgent, META, port=0))
-        resp = c.post("/a2a", json=_send_body(METHOD_MESSAGE_SEND, {"location": "X"}))
-        result = resp.json()["result"]
+        result = c.post("/a2a", json=_send_body(METHOD_MESSAGE_SEND, {"location": "X"})).json()["result"]
         assert result["kind"] == "task"
         assert result["status"]["state"] == "failed"
     finally:

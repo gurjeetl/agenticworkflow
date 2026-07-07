@@ -36,22 +36,25 @@ from fastapi.responses import StreamingResponse
 
 from genie.a2a.agent_card import to_agent_card
 from genie.a2a.types import (
-    ERR_INVALID_PARAMS,
-    ERR_METHOD_NOT_FOUND,
-    ERR_TASK_NOT_FOUND,
     METHOD_MESSAGE_SEND,
     METHOD_MESSAGE_STREAM,
     METHOD_TASKS_CANCEL,
     METHOD_TASKS_GET,
     Artifact,
-    JsonRpcError,
-    JsonRpcResponse,
+    InvalidParamsError,
+    JSONRPCError,
+    JSONRPCErrorResponse,
     Message,
+    MethodNotFoundError,
+    Role,
     Task,
     TaskArtifactUpdateEvent,
+    TaskNotCancelableError,
+    TaskNotFoundError,
     TaskState,
     TaskStatus,
     TaskStatusUpdateEvent,
+    UnsupportedOperationError,
     data_part,
     get_data,
     text_part,
@@ -143,27 +146,27 @@ async def _heartbeat_loop(client: httpx.AsyncClient, meta: AgentMeta, interval: 
 
 
 # --- Task execution helpers -------------------------------------------------
-def _agent_message(meta: AgentMeta, task_id: str, context_id: str | None, result_state: AgentState) -> Message:
+def _agent_message(meta: AgentMeta, task_id: str, context_id: str, result_state: AgentState) -> Message:
     """Build the agent-role reply Message from a finished AgentState.
 
-    A TextPart carries ``final_output``; an optional DataPart carries a
-    structured ``view`` — the same shape the pre-1.2 ``message/send`` returned.
+    A text part carries ``final_output``; an optional data part carries a
+    structured ``view`` — the same shape ``message/send`` has always returned.
     """
     parts = [text_part(result_state.get("final_output") or "")]
     view = result_state.get("view")
     if view:
         parts.append(data_part({"view": view}))
     return Message(
-        role="agent",
-        messageId=uuid.uuid4().hex,
-        taskId=task_id,
-        contextId=context_id,
+        role=Role.agent,
+        message_id=uuid.uuid4().hex,
+        task_id=task_id,
+        context_id=context_id,
         parts=parts,
         metadata={"agent_id": meta.agent_id},
     )
 
 
-def _completed_task(meta: AgentMeta, task_id: str, context_id: str | None, result_state: AgentState) -> Task:
+def _completed_task(meta: AgentMeta, task_id: str, context_id: str, result_state: AgentState) -> Task:
     """Wrap a finished AgentState into a terminal A2A :class:`Task`.
 
     ``error`` on the state → a ``failed`` task carrying the error text; otherwise
@@ -173,23 +176,23 @@ def _completed_task(meta: AgentMeta, task_id: str, context_id: str | None, resul
     error = result_state.get("error")
     if error:
         fail_msg = Message(
-            role="agent",
-            messageId=uuid.uuid4().hex,
-            taskId=task_id,
-            contextId=context_id,
+            role=Role.agent,
+            message_id=uuid.uuid4().hex,
+            task_id=task_id,
+            context_id=context_id,
             parts=[text_part(str(error))],
             metadata={"agent_id": meta.agent_id},
         )
-        return Task(id=task_id, contextId=context_id, status=TaskStatus(state=TaskState.failed, message=fail_msg))
+        return Task(id=task_id, context_id=context_id, status=TaskStatus(state=TaskState.failed, message=fail_msg))
 
     msg = _agent_message(meta, task_id, context_id, result_state)
     artifacts = None
     view = result_state.get("view")
     if view:
-        artifacts = [Artifact(artifactId=uuid.uuid4().hex, name="view", parts=[data_part({"view": view})])]
+        artifacts = [Artifact(artifact_id=uuid.uuid4().hex, name="view", parts=[data_part({"view": view})])]
     return Task(
         id=task_id,
-        contextId=context_id,
+        context_id=context_id,
         status=TaskStatus(state=TaskState.completed, message=msg),
         artifacts=artifacts,
     )
@@ -204,8 +207,8 @@ def _resolve_ids(in_msg: Message) -> tuple[str, str]:
     a contextId for a new interaction" rule.
     """
     meta_in = in_msg.metadata or {}
-    task_id = meta_in.get("task_id") or in_msg.taskId or uuid.uuid4().hex
-    context_id = meta_in.get("thread_id") or in_msg.contextId or uuid.uuid4().hex
+    task_id = meta_in.get("task_id") or in_msg.task_id or uuid.uuid4().hex
+    context_id = meta_in.get("thread_id") or in_msg.context_id or uuid.uuid4().hex
     return task_id, context_id
 
 
@@ -234,15 +237,22 @@ async def _run_task(agent, meta: AgentMeta, in_msg: Message, task_id: str, conte
 
 
 def _rpc_result(rpc_id, payload) -> dict:
-    """Serialize a JSON-RPC success response, dropping null fields.
+    """Build a JSON-RPC success response with an a2a-sdk payload as its ``result``.
 
-    ``exclude_none`` keeps the wire payload strict-validator-clean for external
-    A2A SDK clients: no ``error: null`` on success frames and no null optional
-    fields (e.g. ``timestamp``, empty ``artifacts``) that trip union validation.
+    ``by_alias`` emits the SDK's camelCase wire names; ``exclude_none`` drops null
+    optional fields so strict A2A SDK clients (e.g. A2A Inspector) validate the
+    frame cleanly.
     """
-    return JsonRpcResponse(id=rpc_id, result=payload.model_dump(mode="json", exclude_none=True)).model_dump(
-        mode="json", exclude_none=True
-    )
+    return {
+        "jsonrpc": "2.0",
+        "id": rpc_id,
+        "result": payload.model_dump(mode="json", by_alias=True, exclude_none=True),
+    }
+
+
+def _rpc_error(rpc_id, error: JSONRPCError) -> dict:
+    """Build a JSON-RPC error response from an a2a-sdk error object (standard code)."""
+    return JSONRPCErrorResponse(id=rpc_id, error=error).model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
 def _sse(rpc_id, payload) -> str:
@@ -299,13 +309,7 @@ def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
     async def agent_card() -> dict:
         """Formal A2A discovery document. Routing goes through the Registry, but
         the card is served here too for A2A interoperability."""
-        return to_agent_card(meta).model_dump(mode="json", exclude_none=True)
-
-    def _err(rpc_id, code: int, message: str) -> dict:
-        """Build a JSON-RPC error-response dict for a request id."""
-        return JsonRpcResponse(id=rpc_id, error=JsonRpcError(code=code, message=message)).model_dump(
-            mode="json", exclude_none=True
-        )
+        return to_agent_card(meta).model_dump(mode="json", by_alias=True, exclude_none=True)
 
     def _incoming(body: dict) -> Message:
         """Parse the inbound A2A Message from a JSON-RPC request body (raises on bad input)."""
@@ -320,26 +324,27 @@ def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
         not token-level deltas. The terminal Task is stored for later ``tasks/get``.
         """
         task_id, context_id = _resolve_ids(in_msg)
-        submitted = Task(id=task_id, contextId=context_id, status=TaskStatus(state=TaskState.submitted))
+        submitted = Task(id=task_id, context_id=context_id, status=TaskStatus(state=TaskState.submitted))
         yield _sse(rpc_id, submitted)
-        yield _sse(rpc_id, TaskStatusUpdateEvent(taskId=task_id, contextId=context_id, status=TaskStatus(state=TaskState.working)))
+        yield _sse(rpc_id, TaskStatusUpdateEvent(task_id=task_id, context_id=context_id, status=TaskStatus(state=TaskState.working), final=False))
 
         task = await _run_task(agent, meta, in_msg, task_id, context_id)
         tasks.put(task)
         if task.artifacts:
             for art in task.artifacts:
-                yield _sse(rpc_id, TaskArtifactUpdateEvent(taskId=task.id, contextId=task.contextId, artifact=art, lastChunk=True))
-        yield _sse(rpc_id, TaskStatusUpdateEvent(taskId=task.id, contextId=task.contextId, status=task.status, final=True))
+                yield _sse(rpc_id, TaskArtifactUpdateEvent(task_id=task.id, context_id=task.context_id, artifact=art, last_chunk=True))
+        yield _sse(rpc_id, TaskStatusUpdateEvent(task_id=task.id, context_id=task.context_id, status=task.status, final=True))
 
     @app.post("/a2a", dependencies=[Depends(require_a2a_auth)])
     async def a2a(body: dict):
-        """A2A v1.2 JSON-RPC 2.0 endpoint.
+        """A2A JSON-RPC 2.0 endpoint (protocol 1.0.0 / JSON binding).
 
         Handles ``message/send`` (returns a terminal :class:`Task`),
         ``message/stream`` (SSE stream of task lifecycle events), ``tasks/get``
         and ``tasks/cancel``. Args travel in a request DataPart
         (``{"args": {...}}``); invocation context (task_id, run_id, thread_id,
-        blackboard) travels in the message ``metadata``.
+        blackboard) travels in the message ``metadata``. Errors use the standard
+        a2a-sdk error classes, so JSON-RPC codes are spec-correct.
         """
         rpc_id = body.get("id")
         method = body.get("method")
@@ -348,30 +353,38 @@ def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
             try:
                 in_msg = _incoming(body)
             except Exception as e:
-                return _err(rpc_id, ERR_INVALID_PARAMS, f"invalid message: {e}")
+                return _rpc_error(rpc_id, InvalidParamsError(data={"detail": f"invalid message: {e}"}))
             task = await _run_task(agent, meta, in_msg, *_resolve_ids(in_msg))
             tasks.put(task)
             return _rpc_result(rpc_id, task)
 
         if method == METHOD_MESSAGE_STREAM:
             if not meta.supports_streaming:  # keep the endpoint honest vs. the card
-                return _err(rpc_id, ERR_METHOD_NOT_FOUND, "agent does not support streaming")
+                return _rpc_error(rpc_id, UnsupportedOperationError())
             try:
                 in_msg = _incoming(body)
             except Exception as e:
-                return _err(rpc_id, ERR_INVALID_PARAMS, f"invalid message: {e}")
+                return _rpc_error(rpc_id, InvalidParamsError(data={"detail": f"invalid message: {e}"}))
             return StreamingResponse(_stream_events(rpc_id, in_msg), media_type="text/event-stream")
 
-        if method in (METHOD_TASKS_GET, METHOD_TASKS_CANCEL):
-            task_id = (body.get("params") or {}).get("id")
-            task = tasks.get(task_id) if task_id else None
-            if task is None:
-                return _err(rpc_id, ERR_TASK_NOT_FOUND, f"task '{task_id}' not found")
-            # Runs are synchronous, so a stored task is already terminal; cancel is
-            # best-effort and simply echoes the (completed/failed) task as-is.
-            return _rpc_result(rpc_id, task)
+        if method == METHOD_TASKS_GET:
+            task = _lookup_task(body)
+            return _rpc_result(rpc_id, task) if task else _rpc_error(rpc_id, TaskNotFoundError())
 
-        return _err(rpc_id, ERR_METHOD_NOT_FOUND, f"unsupported method '{method}'")
+        if method == METHOD_TASKS_CANCEL:
+            task = _lookup_task(body)
+            if task is None:
+                return _rpc_error(rpc_id, TaskNotFoundError())
+            # Runs are synchronous, so a stored task is always terminal — the spec
+            # requires TaskNotCancelableError for that case.
+            return _rpc_error(rpc_id, TaskNotCancelableError())
+
+        return _rpc_error(rpc_id, MethodNotFoundError())
+
+    def _lookup_task(body: dict) -> Task | None:
+        """Fetch the stored Task referenced by ``params.id`` (None if absent)."""
+        task_id = (body.get("params") or {}).get("id")
+        return tasks.get(task_id) if task_id else None
 
     return app
 
