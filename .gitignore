@@ -70,3 +70,7 @@ codex.md
 .cursorrules
 CLAUDE.md
 .claude/
+
+# Auto-generated AI context + local backups (not source-controlled)
+.codesight/
+.codesight.local-bak/
