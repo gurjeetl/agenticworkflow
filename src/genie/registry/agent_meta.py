@@ -69,6 +69,10 @@ class AgentMeta(BaseModel):
     # --- Remote operation / discovery (populated when the agent runs as a service) ---
     # Base URL the Executor POSTs to; the A2A "/a2a" path is appended by convention.
     endpoint: str | None = None
+    # Kafka inbox topic for the async transport. None → derived as
+    # "{bus_topic_prefix}.agents.{agent_id}.inbox". Only meaningful when
+    # ``transport`` includes "kafka".
+    inbox_topic: str | None = None
     # Unique per agent process. The registry service assigns a uuid4 if absent.
     instance_id: str | None = None
     # Server-owned liveness fields — stamped by the registry service, not the agent.

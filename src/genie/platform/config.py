@@ -169,6 +169,45 @@ class Settings(BaseSettings):
     agent_provider_organization: str | None = None
     agent_provider_url: str | None = None
 
+    # ── A2A message bus (Kafka) ──────────────────────────────────────────────
+    # Master switch for the async A2A transport. Off by default: every agent
+    # keeps using synchronous JSON-RPC and none of the bus machinery starts.
+    # When on, agents whose AgentMeta.transport includes "kafka" consume their
+    # inbox topic, the Executor suspends on bus tasks, and the gateway runs the
+    # reply-router. Async mode REQUIRES Redis (dedup) and MongoDB (checkpoints +
+    # awaiting records) — startup fails fast if Redis is unconfigured.
+    kafka_enabled: bool = False
+    kafka_bootstrap_servers: str = "localhost:9092"
+    # Broker security — passed through to aiokafka so a corporate Apache Kafka
+    # cluster (SASL_SSL etc.) is a pure config change. Secrets belong in
+    # local.yaml / .env, never in default.yaml.
+    kafka_security_protocol: str = "PLAINTEXT"   # PLAINTEXT|SSL|SASL_PLAINTEXT|SASL_SSL
+    kafka_sasl_mechanism: str | None = None      # PLAIN|SCRAM-SHA-256|SCRAM-SHA-512
+    kafka_sasl_username: str | None = None
+    kafka_sasl_password: str | None = None
+    kafka_ssl_cafile: str | None = None
+    # Topic naming (prefix accommodates org conventions, e.g. "oati.genie").
+    bus_topic_prefix: str = "genie"
+    bus_reply_topic: str | None = None           # None → "{prefix}.replies"
+    bus_dlq_topic: str | None = None             # None → "{prefix}.dlq"
+    bus_consumer_group: str = "genie-gateway"
+    # Dedup key TTL — must comfortably exceed the longest deadline window.
+    bus_dedup_ttl_seconds: int = 900
+    # Default reply deadline for a bus task when the plan/meta gives none, and
+    # the reply-router's sweep cadence for expired waits.
+    a2a_default_deadline_ms: int = 60000
+    bus_sweep_interval_seconds: float = 5.0
+    # ── A2A Supervisor (Phase 2 control plane) ──
+    # When enabled, the standalone Supervisor service owns the expiry ladder
+    # (extend → retry → dead-letter) and the gateway's simple timeout sweep
+    # stands down. The Supervisor also consumes genie.dlq and unblocks waiting
+    # runs with step.cancelled control messages.
+    bus_supervisor_enabled: bool = False
+    bus_supervisor_port: int = 8004
+    bus_max_extends: int = 3          # deadline extensions granted while the agent heartbeats
+    bus_max_attempts: int = 2         # total delivery attempts before dead-lettering
+    bus_extend_ms: int | None = None  # extension length; None → a2a_default_deadline_ms
+
     # ── Security guard ───────────────────────────────────────────────────────
     # Master switch for the input/output content guard. When False the pipeline
     # omits BOTH guard nodes and never loads the llm-guard models — so the app

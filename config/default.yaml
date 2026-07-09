@@ -55,7 +55,7 @@ mcp_services: {}
 # which model below is used for ALL LLM calls (router/planner/synthesizer/agents);
 # base_url is derived as http://{host}:{port}/{prompting_path}.
 llm_services:
-  default: gpt_oss
+  default: 
   models:
     gpt_oss:
       host: "genieapps4.dev.oati.local"
@@ -112,6 +112,14 @@ agent_host: 127.0.0.1
 # agent_advertise_host: 127.0.0.1
 # agent_advertise_port: 8010
 
+# ── A2A protocol / Agent Card ─────────────────────────────────────────────────
+# Advertised A2A protocol version. Left unset → the code default (PROTOCOL_VERSION,
+# currently "1.2"). Pin here only to override without a code change.
+# a2a_protocol_version: "1.2"
+# Optional AgentProvider surfaced on every served Agent Card (/.well-known/agent-card.json).
+# agent_provider_organization: OATI
+# agent_provider_url: https://example.com
+
 # ── Security guard (llm-guard) ────────────────────────────────────────────────
 # Master switch. true (default): the guard runs and its local models load at
 # startup (fail-closed). false: BOTH guard nodes are omitted from the graph and
@@ -146,5 +154,5 @@ planner_max_facts: 40
 
 # ── Observability ─────────────────────────────────────────────────────────────
 mlflow_tracking_uri: http://127.0.0.1:5000
-mlflow_experiment_name: base-agent-framework
+mlflow_experiment_name: genie-platform
 # torch_num_threads: 4

@@ -55,6 +55,27 @@ def route_after_router(state: AgentState) -> str:
     return decision
 
 
+def route_after_executor(state: AgentState) -> str:
+    """Loop the Executor while waves remain (wave-per-invocation), else go to the gate.
+
+    The Executor runs one wave per invocation and advances ``wave_cursor``; this
+    edge closes the loop. Committing each wave to the checkpoint between
+    invocations is what lets a bus task suspend/resume durably mid-plan.
+    """
+    waves = state.get("waves") or []
+    cursor = state.get("wave_cursor")
+    cursor = len(waves) if cursor is None else int(cursor)
+    decision = "executor" if cursor < len(waves) else "gate"
+
+    span = mlflow.get_current_active_span()
+    if span is not None:
+        try:
+            span.add_event("executor.routing", attributes={"next": decision, "wave_cursor": cursor, "waves": len(waves)})
+        except Exception:
+            pass
+    return decision
+
+
 def route_after_gate(state: AgentState) -> str:
     """Loop back to the Planner on a replan decision, else converge on the Synthesizer."""
     action = state.get("next_action") or "synthesize"
@@ -146,7 +167,14 @@ def build_graph():
         )
     graph.add_edge("planner", "orchestrator")
     graph.add_edge("orchestrator", "executor")
-    graph.add_edge("executor", "gate")
+    graph.add_conditional_edges(
+        "executor",
+        route_after_executor,
+        {
+            "executor": "executor",
+            "gate": "gate",
+        },
+    )
     graph.add_conditional_edges(
         "gate",
         route_after_gate,
