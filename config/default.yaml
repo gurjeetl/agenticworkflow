@@ -120,6 +120,41 @@ agent_host: 127.0.0.1
 # agent_provider_organization: OATI
 # agent_provider_url: https://example.com
 
+# ── A2A message bus (Kafka) ───────────────────────────────────────────────────
+# Master switch for the async A2A transport. false (default): every agent uses
+# synchronous JSON-RPC and none of the bus machinery starts. true: agents whose
+# AgentMeta.transport includes "kafka" consume their inbox topic, the Executor
+# suspends on bus tasks, and the gateway runs the reply-router. Async mode
+# REQUIRES redis_url (dedup) and MongoDB (checkpoints + awaiting records).
+# Full guide: docs/ASYNC_A2A.md.
+kafka_enabled: false
+kafka_bootstrap_servers: localhost:9092
+# Broker security — passed straight to aiokafka, so a corporate Apache Kafka
+# cluster is a pure config change. Credentials go in local.yaml / .env, NEVER here.
+# kafka_security_protocol: SASL_SSL        # PLAINTEXT (default) | SSL | SASL_PLAINTEXT | SASL_SSL
+# kafka_sasl_mechanism: SCRAM-SHA-512      # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
+# kafka_ssl_cafile: /etc/ssl/org-ca.pem
+# kafka_sasl_username / kafka_sasl_password → config/local.yaml or .env only.
+# Topic naming — prefix accommodates org conventions (e.g. "oati.genie").
+bus_topic_prefix: genie
+# bus_reply_topic: genie.replies           # unset → "{prefix}.replies"
+# bus_dlq_topic: genie.dlq                 # unset → "{prefix}.dlq"
+bus_consumer_group: genie-gateway
+# Dedup-claim TTL; must comfortably exceed the longest reply deadline below.
+bus_dedup_ttl_seconds: 900
+# Default reply deadline for a bus task, and the gateway sweep cadence for
+# expired waits (the sweep runs only while the Supervisor is disabled).
+a2a_default_deadline_ms: 60000
+bus_sweep_interval_seconds: 5.0
+# A2A Supervisor (control plane). When enabled — and services/supervisor is
+# running — it owns the expiry ladder (extend → retry → dead-letter) and the
+# gateway's simple timeout sweep stands down.
+bus_supervisor_enabled: false
+bus_supervisor_port: 8004
+bus_max_extends: 3          # deadline extensions granted while the agent heartbeats
+bus_max_attempts: 2         # total delivery attempts before dead-lettering
+# bus_extend_ms: 60000      # extension length; unset → a2a_default_deadline_ms
+
 # ── Security guard (llm-guard) ────────────────────────────────────────────────
 # Master switch. true (default): the guard runs and its local models load at
 # startup (fail-closed). false: BOTH guard nodes are omitted from the graph and
