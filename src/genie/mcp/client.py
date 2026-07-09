@@ -3,7 +3,6 @@
 This is the platform's MCP connectivity surfaced to inheriting agents — it turns
 configured servers into permission-filtered LangChain tools.
 """
-import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 

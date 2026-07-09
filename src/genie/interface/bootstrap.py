@@ -72,6 +72,28 @@ def _make_lifespan(settings: Settings):
         redis = get_redis_store()
         _log.info("redis.ready", extra={"attrs": {"enabled": redis.enabled}})
 
+        # Async A2A transport: start the reply-router (reply consumer + deadline
+        # sweep) that resumes suspended runs. Fail fast on a missing Redis —
+        # dedup is what makes at-least-once bus delivery safe, so running async
+        # without it would silently allow double-processing.
+        reply_router = None
+        if settings.kafka_enabled:
+            from genie.platform.redis import redis_enabled
+
+            if not redis_enabled():
+                raise RuntimeError(
+                    "kafka_enabled=True requires Redis (redis_url) for bus dedup — "
+                    "configure REDIS_URL or disable the async transport"
+                )
+            from genie.interface.reply_router import ReplyRouter
+            from genie.messaging import get_awaiting_store
+
+            get_awaiting_store().ensure_indexes()
+            reply_router = ReplyRouter()
+            await reply_router.start()
+            app.state.reply_router = reply_router  # the cancel API reaches it here
+            _log.info("a2a.reply_router.ready")
+
         # Optional relational backends (Postgres / SQL Server). Best-effort: when a
         # DSN is configured, run the health-check so a bad connection surfaces in the
         # logs at startup; never block boot if it fails.
@@ -112,6 +134,9 @@ def _make_lifespan(settings: Settings):
 
         yield
 
+        if reply_router is not None:
+            await reply_router.stop()
+
         from genie.platform.db import close_all_connections
 
         await close_all_connections()
@@ -141,10 +166,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     get_graph()
 
-    from genie.interface.routers import chat, conversations, health, registry, state
+    from genie.interface.routers import chat, conversations, health, registry, runs, state
 
     app.include_router(health.router)
     app.include_router(chat.router)
+    app.include_router(runs.router)
     app.include_router(state.router)
     app.include_router(registry.router)
     app.include_router(conversations.router)

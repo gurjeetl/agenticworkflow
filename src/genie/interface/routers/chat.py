@@ -4,6 +4,7 @@ import uuid
 
 import mlflow
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from langchain_core.messages import AIMessage, HumanMessage
 from mlflow.entities import SpanType
 from pydantic import BaseModel
@@ -23,13 +24,18 @@ _DB_OP_PRODUCERS = {"planner", "executor", "synthesizer"}
 
 
 class ChatRequest(BaseModel):
-    """A chat turn: the user ``message`` plus the conversation's ``thread_id``."""
+    """A chat turn: the user ``message`` plus the conversation's ``thread_id``.
+
+    ``tenant_id`` (optional) scopes the run for multi-tenant deployments —
+    blackboard keys, bus headers, and awaiting records all carry it.
+    """
 
     message: str
     thread_id: str
+    tenant_id: str | None = None
 
 
-def _base_state(message: str, thread_id: str, run_id: str, prior_messages, long_term_keys, prior_values=None) -> dict:
+def _base_state(message: str, thread_id: str, run_id: str, prior_messages, long_term_keys, prior_values=None, tenant_id: str | None = None) -> dict:
     """Build the initial graph ``AgentState`` for one run, seeded with prior memory."""
     prior_values = prior_values or {}
     return {
@@ -37,6 +43,7 @@ def _base_state(message: str, thread_id: str, run_id: str, prior_messages, long_
         "current_task": "",
         "thread_id": thread_id,
         "run_id": run_id,
+        "tenant_id": tenant_id,
         "messages": prior_messages + [HumanMessage(content=message)],
         "agent_scratchpad": "",
         "iteration_count": 0,
@@ -55,6 +62,8 @@ def _base_state(message: str, thread_id: str, run_id: str, prior_messages, long_
         "plan": None,
         "agent_versions": {},
         "waves": None,
+        "wave_cursor": 0,
+        "bus_fallback": None,
         "plan_error": None,
         "blackboard": {},
         "blackboard_snapshot": None,
@@ -95,7 +104,7 @@ async def chat(req: ChatRequest):
         prior_values = prior_snapshot.values if prior_snapshot and prior_snapshot.values else {}
         run_id = uuid.uuid4().hex
         span.set_attribute("run_id", run_id)
-        state = _base_state(req.message, req.thread_id, run_id, prior_messages, long_term_keys, prior_values)
+        state = _base_state(req.message, req.thread_id, run_id, prior_messages, long_term_keys, prior_values, tenant_id=req.tenant_id)
         try:
             result = graph.invoke(state, config=config)
         except Exception as e:
@@ -105,6 +114,18 @@ async def chat(req: ChatRequest):
             except Exception:
                 pass
             return {"response": "Sorry, something went wrong."}
+
+        # Async A2A: the run suspended on a bus task (Executor interrupt). The
+        # reply-router will resume and finish it out-of-band; hand the client a
+        # pending handle to poll via GET /runs/{thread_id}/{run_id}. Session
+        # messages are persisted by the reply-router when the run completes.
+        if result.get("__interrupt__"):
+            span.set_outputs({"status": "pending", "run_id": run_id})
+            _log.info("chat.pending", extra={"attrs": {"thread_id": req.thread_id, "run_id": run_id}})
+            return JSONResponse(
+                status_code=202,
+                content={"status": "pending", "thread_id": req.thread_id, "run_id": run_id},
+            )
 
         await store.save_messages(
             req.thread_id,

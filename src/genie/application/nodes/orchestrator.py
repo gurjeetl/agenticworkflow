@@ -33,13 +33,13 @@ class Orchestrator(Observable):
 
         if not plan.subtasks:
             self.log_event("orchestrator.empty_plan")
-            return patch(state, waves=[], plan_error=None)
+            return patch(state, waves=[], plan_error=None, wave_cursor=0)
 
         try:
             waves = plan.waves()
         except Exception as e:
             self.log("error", "orchestrator.dag_invalid", error=str(e))
-            return patch(state, waves=[], plan_error=str(e))
+            return patch(state, waves=[], plan_error=str(e), wave_cursor=0)
 
         wave_ids = [[t.id for t in wave] for wave in waves]
         self.log_event(
@@ -47,4 +47,5 @@ class Orchestrator(Observable):
             wave_count=len(wave_ids),
             task_count=sum(len(w) for w in wave_ids),
         )
-        return patch(state, waves=wave_ids, plan_error=None)
+        # wave_cursor=0 restarts the Executor's wave loop for this (re)plan.
+        return patch(state, waves=wave_ids, plan_error=None, wave_cursor=0)

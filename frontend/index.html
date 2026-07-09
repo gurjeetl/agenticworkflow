@@ -338,6 +338,19 @@
         }
       };
 
+      // Async A2A: a 202 from /chat means the run suspended on a bus task and
+      // finishes out-of-band — poll /runs/{thread}/{run} until it completes.
+      const pollRun = async (threadId, runId) => {
+        for (let i = 0; i < 300; i++) {
+          await new Promise(r => setTimeout(r, 1000));
+          const res = await fetch(`/runs/${threadId}/${runId}`);
+          const data = await res.json();
+          if (data.status === "completed") return data;
+          if (data.status === "unknown") break;
+        }
+        return { response: "The request is taking longer than expected — please check back.", view: null };
+      };
+
       const send = async () => {
         const text = input.trim();
         if (!text || loading) return;
@@ -350,7 +363,10 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ message: text, thread_id: threadId }),
           });
-          const data = await res.json();
+          let data = await res.json();
+          if (res.status === 202 && data.status === "pending") {
+            data = await pollRun(data.thread_id, data.run_id);
+          }
           setMessages(prev => [...prev, { role: "assistant", content: data.response, view: data.view }]);
           refreshConversations();
         } catch {

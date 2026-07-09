@@ -59,8 +59,25 @@ from genie.a2a.types import (
     get_data,
     text_part,
 )
+from genie.messaging import Dedup, get_broker
+from genie.messaging.broker import Broker, BusMessage
+from genie.messaging.envelope import (
+    HDR_ATTEMPT,
+    HDR_CORRELATION_ID,
+    HDR_ERROR,
+    HDR_FROM,
+    HDR_KIND,
+    HDR_REPLY_TO,
+    HDR_THREAD_ID,
+    KIND_DEAD_LETTER,
+    KIND_REPLY,
+    dlq_topic,
+    inbox_topic,
+    reply_topic,
+)
 from genie.observability import configure_logging, get_logger
 from genie.platform.config import get_settings
+from genie.platform.redis import redis_enabled
 from genie.agents.task_state import build_task_state
 from genie.agents.task_store import TaskStore
 from genie.application.state import AgentState
@@ -236,6 +253,87 @@ async def _run_task(agent, meta: AgentMeta, in_msg: Message, task_id: str, conte
     return _completed_task(meta, task_id, context_id, result_state)
 
 
+# --- Async transport: Kafka inbox consumer -----------------------------------
+async def _handle_inbox_message(
+    broker: Broker, agent, meta: AgentMeta, tasks: TaskStore, dedup: Dedup, bm: BusMessage
+) -> None:
+    """Process one bus-delivered request: dedup → run → reply (poison → DLQ).
+
+    Mirrors the diagram's consumer contract exactly:
+
+    * A payload that fails schema validation is a **poison pill** — every retry
+      would fail identically, so it goes straight to the DLQ with the parse
+      error attached, and **no reply** is produced (the caller's deadline sweep
+      or the Supervisor unblocks the waiting run).
+    * A redelivered ``(correlation_id, attempt)`` is dropped by the dedup claim,
+      so at-least-once delivery never double-runs the agent.
+    * A *business* failure (the agent ran and returned an error) is NOT dead-
+      lettered — it comes back as a ``failed`` Task reply, exactly like the
+      synchronous path, so the Executor/Gate handle it uniformly.
+    """
+    headers = bm.headers
+    cid = headers.get(HDR_CORRELATION_ID, "")
+    attempt = headers.get(HDR_ATTEMPT, "1")
+    try:
+        in_msg = Message.model_validate(json.loads(bm.value))
+    except Exception as e:  # poison pill: no retry can ever succeed
+        _log.warning("a2a.bus.poison_pill", extra={"attrs": {"cid": cid, "error": str(e)}})
+        await broker.produce(
+            dlq_topic(),
+            value=bm.value,
+            key=bm.key,
+            headers={
+                **headers,
+                HDR_KIND: KIND_DEAD_LETTER,
+                HDR_FROM: meta.agent_id,
+                HDR_ERROR: f"schema_validation_failed: {e}",
+            },
+        )
+        return
+
+    if cid and not await dedup.claim_inbox(meta.agent_id, cid, attempt):
+        _log.info("a2a.bus.duplicate_dropped", extra={"attrs": {"cid": cid, "attempt": attempt}})
+        return
+
+    task_id, context_id = _resolve_ids(in_msg)
+    task = await _run_task(agent, meta, in_msg, task_id, context_id)
+    tasks.put(task)
+    await broker.produce(
+        headers.get(HDR_REPLY_TO) or reply_topic(),
+        value=task.model_dump_json(by_alias=True, exclude_none=True).encode("utf-8"),
+        key=headers.get(HDR_THREAD_ID) or context_id,
+        headers={
+            HDR_KIND: KIND_REPLY,
+            HDR_CORRELATION_ID: cid,
+            HDR_ATTEMPT: attempt,
+            HDR_FROM: meta.agent_id,
+            HDR_THREAD_ID: headers.get(HDR_THREAD_ID, context_id),
+        },
+    )
+    _log.info(
+        "a2a.bus.replied",
+        extra={"attrs": {"cid": cid, "state": task.status.state.value, "task_id": task.id}},
+    )
+
+
+async def _consume_inbox(broker: Broker, agent, meta: AgentMeta, tasks: TaskStore) -> None:
+    """Consume this agent's inbox topic forever; one handler call per record.
+
+    Handler errors are logged and the loop continues — one bad record must never
+    kill the consumer (the record was auto-committed; dedup + the caller's
+    deadline path own recovery).
+    """
+    topic = meta.inbox_topic or inbox_topic(meta.agent_id)
+    group = f"{get_settings().bus_topic_prefix}-agent-{meta.agent_id}"
+    dedup = Dedup()
+    _log.info("a2a.bus.consuming", extra={"attrs": {"topic": topic, "group": group}})
+    async for bm in broker.consume([topic], group=group):
+        try:
+            await _handle_inbox_message(broker, agent, meta, tasks, dedup, bm)
+        except Exception as e:
+            _log.error("a2a.bus.handler_failed", extra={"attrs": {"error": str(e)}}, exc_info=True)
+
+
 def _rpc_result(rpc_id, payload) -> dict:
     """Build a JSON-RPC success response with an a2a-sdk payload as its ``result``.
 
@@ -276,13 +374,30 @@ def create_agent_app(agent_cls: type, meta: AgentMeta, port: int) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        """Register + start heartbeats on startup; cancel + deregister on shutdown."""
+        """Register + start heartbeats (+ the Kafka inbox consumer in async mode)."""
         client = httpx.AsyncClient(timeout=get_settings().registry_timeout_s)
         interval = await _register(client, meta) or default_interval
         hb_task = asyncio.create_task(_heartbeat_loop(client, meta, interval))
+
+        # Async transport: consume this agent's inbox topic when opted in.
+        bus_task: asyncio.Task | None = None
+        broker = None
+        settings = get_settings()
+        if settings.kafka_enabled and meta.transport in ("kafka", "both"):
+            if not redis_enabled():
+                raise RuntimeError(
+                    "kafka_enabled=True requires Redis (redis_url) for bus dedup — "
+                    "configure REDIS_URL or disable the async transport"
+                )
+            broker = get_broker()
+            bus_task = asyncio.create_task(_consume_inbox(broker, agent, meta, tasks))
         try:
             yield
         finally:
+            if bus_task is not None:
+                bus_task.cancel()
+            if broker is not None:
+                await broker.close()
             hb_task.cancel()
             try:
                 await client.post(

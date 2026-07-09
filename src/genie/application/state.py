@@ -22,6 +22,9 @@ class AgentState(TypedDict):
     current_task: str
     thread_id: str
     run_id: str
+    # Multi-tenancy scope: flows into blackboard keys, bus headers, and awaiting
+    # records. None = single-tenant (pre-tenancy key shapes preserved).
+    tenant_id: Optional[str]
 
     # Conversation
     messages: Annotated[list[BaseMessage], operator.add]
@@ -58,6 +61,14 @@ class AgentState(TypedDict):
     plan: Optional[dict]
     agent_versions: dict[str, str]
     waves: Optional[list[list[str]]]   # Orchestrator decomposition: task ids per wave
+    # Next wave index for the Executor's wave-per-invocation loop. The node runs
+    # ONE wave per invocation and loops back on itself while cursor < len(waves),
+    # so each wave's blackboard results commit to the checkpoint before the next
+    # starts — required for durable interrupt/resume on async (bus) tasks.
+    wave_cursor: int
+    # Fast path (transport="both"): task ids whose direct call failed and must
+    # re-enter the CURRENT wave over the bus. None/empty = no fallback pending.
+    bus_fallback: Optional[list[str]]
     plan_error: Optional[str]          # DAG decomposition failure, surfaced to Executor
     blackboard: dict[str, dict]
     blackboard_snapshot: Optional[dict]

@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Genie A2A Bus — Architecture</title>
+<style>*,*::before,*::after{box-sizing:border-box}body{margin:0}</style>
+</head>
+<body>
+<style>
+  :root{
+    --bg:#f4f7f8; --panel:#ffffff; --panel2:#eef2f4;
+    --ink:#17222b; --muted:#5c6b76; --line:#d7e0e5; --line2:#c3cfd6;
+    --flow:#0e7c6b;          /* data plane / teal */
+    --flow-soft:#0e7c6b1a;
+    --ctrl:#a3660f;          /* control plane / amber */
+    --ctrl-soft:#a3660f16;
+    --warn:#b23a4c;          /* trust boundary / crimson */
+    --warn-soft:#b23a4c12;
+    --edge:#6a5aa8;          /* cross-org / violet */
+    --edge-soft:#6a5aa814;
+    --sans:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",sans-serif;
+    --disp:"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+    --mono:"Cascadia Code","JetBrains Mono",Consolas,"SF Mono",ui-monospace,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0f1519; --panel:#151d23; --panel2:#1b252c;
+      --ink:#e2eaef; --muted:#8da0ab; --line:#28343c; --line2:#354550;
+      --flow:#35b39e; --flow-soft:#35b39e1f;
+      --ctrl:#d3993c; --ctrl-soft:#d3993c1c;
+      --warn:#e0697b; --warn-soft:#e0697b17;
+      --edge:#9d8fd8; --edge-soft:#9d8fd81c;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0f1519; --panel:#151d23; --panel2:#1b252c;
+    --ink:#e2eaef; --muted:#8da0ab; --line:#28343c; --line2:#354550;
+    --flow:#35b39e; --flow-soft:#35b39e1f;
+    --ctrl:#d3993c; --ctrl-soft:#d3993c1c;
+    --warn:#e0697b; --warn-soft:#e0697b17;
+    --edge:#9d8fd8; --edge-soft:#9d8fd81c;
+  }
+  :root[data-theme="light"]{
+    --bg:#f4f7f8; --panel:#ffffff; --panel2:#eef2f4;
+    --ink:#17222b; --muted:#5c6b76; --line:#d7e0e5; --line2:#c3cfd6;
+    --flow:#0e7c6b; --flow-soft:#0e7c6b1a;
+    --ctrl:#a3660f; --ctrl-soft:#a3660f16;
+    --warn:#b23a4c; --warn-soft:#b23a4c12;
+    --edge:#6a5aa8; --edge-soft:#6a5aa814;
+  }
+
+  html{background:var(--bg)}
+  body{
+    font-family:var(--sans); color:var(--ink); background:var(--bg);
+    line-height:1.55; font-size:15.5px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1020px; margin:0 auto; padding:40px 22px 80px}
+
+  a{color:var(--flow)}
+  code,.t{font-family:var(--mono)}
+  h1,h2,h3{font-family:var(--disp); text-wrap:balance; line-height:1.18; margin:0}
+  h1{font-size:clamp(26px,4.2vw,36px); font-weight:700; letter-spacing:-.015em}
+  h2{font-size:21px; font-weight:700; letter-spacing:-.01em}
+  h3{font-size:15px; font-weight:650}
+  p{margin:0; max-width:72ch}
+  .muted{color:var(--muted)}
+
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--flow); font-weight:600;
+  }
+  header.hero{display:flex; flex-direction:column; gap:14px; margin-bottom:14px}
+  .hero p{font-size:16px; color:var(--muted); max-width:66ch}
+
+  nav.idx{display:flex; flex-wrap:wrap; gap:8px; margin-top:6px}
+  nav.idx a{
+    font-family:var(--mono); font-size:12px; text-decoration:none; color:var(--ink);
+    border:1px solid var(--line); border-radius:999px; padding:5px 12px; background:var(--panel);
+  }
+  nav.idx a:hover, nav.idx a:focus-visible{border-color:var(--flow); color:var(--flow); outline:none}
+
+  section{margin-top:52px; display:flex; flex-direction:column; gap:16px}
+  .sec-head{display:flex; flex-direction:column; gap:6px}
+  .sec-head .eyebrow.warn{color:var(--warn)}
+  .sec-head .eyebrow.edge{color:var(--edge)}
+  .sec-head .eyebrow.ctrl{color:var(--ctrl)}
+
+  .panel{
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:20px;
+  }
+  .scroll{overflow-x:auto}
+  .scroll > .seq, .scroll > .minw{min-width:700px}
+
+  /* topic + header chips */
+  .t{
+    display:inline-block; font-size:11.5px; padding:1px 7px; border-radius:5px;
+    background:var(--flow-soft); border:1px solid color-mix(in srgb, var(--flow) 35%, transparent);
+    color:var(--ink); white-space:nowrap;
+  }
+  .t.ctrl{background:var(--ctrl-soft); border-color:color-mix(in srgb, var(--ctrl) 40%, transparent)}
+  .t.warn{background:var(--warn-soft); border-color:color-mix(in srgb, var(--warn) 40%, transparent)}
+  .t.edge{background:var(--edge-soft); border-color:color-mix(in srgb, var(--edge) 40%, transparent)}
+  .t.plain{background:var(--panel2); border-color:var(--line2)}
+
+  /* ---------- sequence diagram ---------- */
+  .seq{position:relative; padding-bottom:8px}
+  .lanes{display:grid; grid-template-columns:repeat(3,1fr); position:relative; z-index:2; margin-bottom:4px}
+  .lane{display:flex; flex-direction:column; align-items:center; gap:2px}
+  .lane b{
+    font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    background:var(--panel2); border:1px solid var(--line2); border-radius:6px; padding:4px 12px;
+  }
+  .lane span{font-size:11px; color:var(--muted); font-family:var(--mono)}
+  .ll{position:absolute; top:52px; bottom:0; border-left:1.5px dashed var(--line2); z-index:0}
+  .ll.l1{left:16.666%} .ll.l2{left:50%} .ll.l3{left:83.333%}
+
+  .seq-row{display:grid; grid-template-columns:repeat(3,1fr); margin-top:20px; position:relative; z-index:1}
+
+  .self{
+    justify-self:center; width:min(88%,300px); text-align:center;
+    background:var(--panel); border:1px solid var(--line2); border-radius:8px;
+    padding:9px 12px; font-family:var(--mono); font-size:11.5px; line-height:1.5;
+  }
+  .self .sub, .arr .sub{display:block; color:var(--muted); font-size:10.5px; margin-top:3px; font-family:var(--mono)}
+  .c1{grid-column:1} .c2{grid-column:2} .c3{grid-column:3}
+
+  .arr{width:50%; justify-self:center; align-self:end; position:relative}
+  .arr.s12{grid-column:1 / 3} .arr.s23{grid-column:2 / 4}
+  .arr .lbl{
+    display:block; width:150%; margin-left:-25%; text-align:center;
+    font-family:var(--mono); font-size:11px; line-height:1.5; margin-bottom:7px;
+  }
+  .arr .line{border-top:2px solid var(--flow); position:relative}
+  .arr.rt .line::after{
+    content:""; position:absolute; right:-1px; top:-6px;
+    border-top:5px solid transparent; border-bottom:5px solid transparent;
+    border-left:9px solid var(--flow);
+  }
+  .arr.lt .line::after{
+    content:""; position:absolute; left:-1px; top:-6px;
+    border-top:5px solid transparent; border-bottom:5px solid transparent;
+    border-right:9px solid var(--flow);
+  }
+  .n{
+    display:inline-flex; align-items:center; justify-content:center;
+    width:17px; height:17px; border-radius:50%; margin-right:5px;
+    background:var(--flow); color:var(--bg); font-size:10.5px; font-weight:700; font-family:var(--mono);
+  }
+
+  /* glossary cards */
+  .gloss{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:12px}
+  .gcard{
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:14px 16px; font-size:13px; display:flex; flex-direction:column; gap:6px;
+  }
+  .gcard b.term{
+    font-family:var(--mono); font-size:12.5px; letter-spacing:.04em; color:var(--flow);
+  }
+  .gcard.ctrl b.term{color:var(--ctrl)}
+  .gcard p{color:var(--ink); max-width:none}
+  .gcard .where{font-family:var(--mono); font-size:10.5px; color:var(--muted); margin-top:auto; padding-top:4px}
+
+  /* stores strip */
+  .stores{display:flex; flex-wrap:wrap; gap:10px; margin-top:18px}
+  .store{
+    flex:1 1 220px; background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+    padding:10px 14px; font-size:12.5px;
+  }
+  .store b{font-family:var(--mono); font-size:11.5px; display:block; margin-bottom:2px}
+
+  /* control-plane ladder */
+  .ladder{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:12px}
+  .rung{
+    border:1px solid color-mix(in srgb, var(--ctrl) 35%, transparent);
+    background:var(--ctrl-soft); border-radius:8px; padding:10px 12px; font-size:12.5px;
+  }
+  .rung b{font-family:var(--mono); font-size:11.5px; color:var(--ctrl); display:block; letter-spacing:.06em}
+  .rung.dead{border-color:color-mix(in srgb, var(--warn) 40%, transparent); background:var(--warn-soft)}
+  .rung.dead b{color:var(--warn)}
+
+  /* problem section */
+  .topicrows{display:flex; flex-direction:column; gap:8px; margin-top:4px}
+  .trow{
+    display:grid; grid-template-columns:minmax(230px,1fr) minmax(150px,.8fr) minmax(220px,1.2fr);
+    gap:12px; align-items:center; padding:9px 12px;
+    background:var(--panel2); border:1px solid var(--line); border-radius:8px; font-size:12.5px;
+  }
+  .trow .who{font-family:var(--mono); font-size:11.5px; color:var(--warn); font-weight:600}
+  .thead{background:none; border:none; padding:2px 12px; color:var(--muted); font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase}
+  .abuse{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; margin-top:14px}
+  .abuse div{
+    border:1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+    background:var(--warn-soft); border-radius:8px; padding:11px 13px; font-size:12.5px;
+  }
+  .abuse b{color:var(--warn); font-size:12.5px}
+
+  /* target section */
+  .aclbar{
+    display:flex; flex-wrap:wrap; gap:8px 18px; align-items:center;
+    border:1px solid color-mix(in srgb, var(--flow) 35%, transparent);
+    background:var(--flow-soft); border-radius:8px; padding:10px 14px; font-size:12.5px;
+  }
+  .aclbar b{font-family:var(--mono); font-size:11.5px; letter-spacing:.06em; color:var(--flow)}
+  .teams{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px}
+  .team{border:1px solid var(--line); border-radius:10px; background:var(--panel); overflow:hidden}
+  .team header{
+    display:flex; justify-content:space-between; align-items:baseline; gap:8px;
+    padding:10px 15px; border-bottom:1px solid var(--line); background:var(--panel2);
+  }
+  .team header b{font-family:var(--mono); font-size:12.5px}
+  .team header span{font-size:11px; color:var(--muted); font-family:var(--mono)}
+  .team ul{list-style:none; margin:0; padding:12px 15px; display:flex; flex-direction:column; gap:8px; font-size:12.5px}
+  .team li{display:flex; flex-wrap:wrap; gap:6px; align-items:center}
+  .team li .role{color:var(--muted); font-size:11px; font-family:var(--mono); min-width:74px}
+
+  table{border-collapse:collapse; width:100%; font-size:12.5px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); font-weight:600}
+  td:first-child{font-family:var(--mono); font-size:11.5px; white-space:nowrap}
+  tbody tr:last-child td{border-bottom:none}
+  td .t{margin:1px 2px 1px 0}
+
+  ol.delta{margin:0; padding-left:22px; display:flex; flex-direction:column; gap:9px; font-size:13.5px; max-width:78ch}
+  ol.delta code{font-size:12px; background:var(--panel2); border:1px solid var(--line); border-radius:4px; padding:0 5px}
+
+  /* cross-org */
+  .xorg{display:grid; grid-template-columns:1fr auto 1fr; gap:0; align-items:stretch}
+  .org{border:1px solid var(--line); border-radius:10px; background:var(--panel); padding:14px 16px; font-size:12.5px}
+  .org h3{font-family:var(--mono); font-size:12px; letter-spacing:.08em; text-transform:uppercase; margin-bottom:8px}
+  .org .businner{border:1px dashed var(--line2); border-radius:8px; padding:10px 12px; background:var(--panel2); display:flex; flex-direction:column; gap:6px}
+  .bridge{
+    display:flex; flex-direction:column; justify-content:center; align-items:center; gap:6px;
+    padding:0 14px; min-width:190px; text-align:center;
+  }
+  .bridge .pipe{
+    border:1.5px solid var(--edge); background:var(--edge-soft); border-radius:10px;
+    padding:11px 14px; font-family:var(--mono); font-size:11.5px; color:var(--ink); line-height:1.6;
+  }
+  .bridge .pipe b{color:var(--edge); letter-spacing:.06em}
+  .bridge .wire{font-family:var(--mono); font-size:13px; color:var(--edge)}
+  .noline{font-size:11px; color:var(--muted); font-family:var(--mono)}
+
+  .note{
+    border-left:3px solid var(--ctrl); background:var(--ctrl-soft);
+    border-radius:0 8px 8px 0; padding:11px 15px; font-size:13px; max-width:78ch;
+  }
+  .note.warn{border-left-color:var(--warn); background:var(--warn-soft)}
+
+  footer{margin-top:56px; padding-top:16px; border-top:1px solid var(--line); font-size:12px; color:var(--muted); font-family:var(--mono); line-height:1.8}
+
+  @media (max-width:760px){
+    .ladder{grid-template-columns:1fr}
+    .trow{grid-template-columns:1fr; gap:4px}
+    .trow.thead{display:none}
+    .xorg{grid-template-columns:1fr}
+    .bridge{padding:12px 0; min-width:0}
+  }
+  @media (prefers-reduced-motion:no-preference){
+    nav.idx a{transition:color .15s,border-color .15s}
+  }
+</style>
+
+<div class="wrap">
+
+<header class="hero">
+  <span class="eyebrow">Genie platform · A2A over Kafka · feat/a2a-protocol-1.2</span>
+  <h1>How a run travels the bus — and how to make it multi-team safe</h1>
+  <p>Start with the cast of components, then the async request/reply flow that runs today, the Supervisor
+     control plane behind it, why one shared credential makes every topic readable, and the per-team /
+     cross-org target design.</p>
+  <nav class="idx">
+    <a href="#pieces">0 · the pieces</a>
+    <a href="#today">1 · today's flow</a>
+    <a href="#ctrl">2 · control plane</a>
+    <a href="#gap">3 · the gap</a>
+    <a href="#target">4 · multi-team target</a>
+    <a href="#xorg">5 · cross-org</a>
+  </nav>
+</header>
+
+<!-- ================= 0. THE PIECES ================= -->
+<section id="pieces">
+  <div class="sec-head">
+    <span class="eyebrow">0 · The pieces</span>
+    <h2>Who's who, before the diagrams</h2>
+    <p class="muted">Every box in the diagrams below is one of these six. Agents never talk to users,
+       and the gateway never imports agent code — they only meet on the bus and in the Registry.</p>
+  </div>
+
+  <div class="gloss">
+    <div class="gcard">
+      <b class="term">Gateway</b>
+      <p>The main FastAPI process (:8000) a user's prompt enters. It hosts the LangGraph state machine
+         (Guard → Router → Planner → Orchestrator → Executor → Gate → Synthesizer) — the "brain" that
+         plans work, dispatches it to agents, and assembles the final answer. Only the gateway talks to users.</p>
+      <span class="where">src/genie/interface/bootstrap.py · application/graph.py</span>
+    </div>
+    <div class="gcard">
+      <b class="term">Agent service</b>
+      <p>A separate process per agent (:8010+), started by the <code>run_agent</code> harness. Exposes the agent
+         two ways: synchronous JSON-RPC over HTTP, and a Kafka consumer on its own inbox topic
+         <code>genie.agents.{id}.inbox</code>. Agents self-register with the Registry (:8002); the gateway
+         discovers them there, so teams deploy agents without touching the platform.</p>
+      <span class="where">src/genie/agents/server.py</span>
+    </div>
+    <div class="gcard">
+      <b class="term">interrupt()</b>
+      <p>LangGraph's "durable await". After producing a bus request, the Executor calls <code>interrupt()</code>:
+         the entire run state is saved to a checkpoint and execution stops — the process could even restart.
+         When the reply arrives, <code>graph.invoke(Command(resume=results))</code> wakes the run exactly where
+         it paused. On resume the node re-runs from the top, which is why correlation ids are deterministic:
+         the re-produce is a duplicate that dedup drops.</p>
+      <span class="where">application/nodes/executor.py · checkpointer.py</span>
+    </div>
+    <div class="gcard">
+      <b class="term">Dedup</b>
+      <p>Kafka delivers <em>at least</em> once — crashes, rebalances and the interrupt-resume re-produce all
+         cause duplicates. Dedup turns that into an effectively-exactly-once system via atomic Redis claims:
+         first claimant wins, everyone else drops the work. Used at three points: agent inbox
+         <code>(cid, attempt)</code> so an agent never runs twice; per reply, so a real reply, a timeout and a
+         cancel race to one winner; per group, so a fanned-out run resumes exactly once.</p>
+      <span class="where">src/genie/messaging/dedup.py</span>
+    </div>
+    <div class="gcard">
+      <b class="term">ReplyRouter</b>
+      <p>The counterpart of <code>interrupt()</code> — a loop inside the gateway and the <em>only</em> consumer
+         of the reply topic. For each record it reads the <code>correlation_id</code> header, looks up the
+         matching <code>a2a_awaiting</code> record in Mongo, marks it resolved, and when the whole dispatch
+         group is complete, resumes the suspended graph in a background task.</p>
+      <span class="where">src/genie/interface/reply_router.py</span>
+    </div>
+    <div class="gcard ctrl">
+      <b class="term">Supervisor</b>
+      <p>The control plane (§ 2): a separate process that sweeps expired waits through the
+         EXTEND → RETRY → DEAD-LETTER ladder and consumes the DLQ, unblocking stuck runs with
+         <code>step.cancelled</code> control messages. It has no graph — all unblocking flows back through the bus.</p>
+      <span class="where">src/genie/messaging/supervisor.py · services/supervisor/</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin-bottom:10px">How a reply finds its owner — nobody "recognizes" replies by reading them</h3>
+    <p style="font-size:13.5px; max-width:78ch">Agents never read the reply topic, so agent C never has to decide
+       "is this mine?". Matching is a database lookup keyed by an opaque ticket number — like a restaurant pager:
+       the kitchen puts food on the counter with ticket #42; other diners aren't watching the counter at all.</p>
+    <div class="stores">
+      <div class="store"><b>1 · ticket written first</b>
+        Before producing, the Executor writes an <code>a2a_awaiting</code> record to Mongo:
+        cid = <code>uuid5(run_id:task_id:attempt)</code>, plus thread_id, run_id, group_id — <em>who is waiting</em>.</div>
+      <div class="store"><b>2 · agent echoes the ticket</b>
+        Agent B copies <code>correlation_id</code> from request headers into its reply headers unchanged.
+        B never knows or cares who's waiting.</div>
+      <div class="store"><b>3 · router looks it up</b>
+        The ReplyRouter fetches the cid's record from Mongo — the record says which run this belongs to.
+        Unknown cid → logged and ignored.</div>
+      <div class="store"><b>4 · any instance may win</b>
+        Multiple gateways share one consumer group, so each reply reaches exactly one instance — not necessarily
+        the dispatcher. Fine: waiting state (Mongo), claims (Redis) and checkpoints are shared, so ownership is
+        a property of the record, never the process.</div>
+    </div>
+    <p class="note" style="margin-top:14px"><b>Two implications:</b> consumers of one reply topic must be one
+       logical application sharing one awaiting store — that's why each team gets its own reply topic in § 4.
+       And "not reading what isn't yours" is cooperative, not enforced: a modified agent <em>could</em> subscribe
+       or forge a reply with an observed cid (§ 3) — ACLs are the enforcement layer.</p>
+    <p class="muted" style="font-size:12px; margin-top:10px; font-family:var(--mono)">note: agents never call each
+       other over the bus — BaseAgent.call_peer is blocking HTTP JSON-RPC. Only the gateway's Executor dispatches
+       via Kafka (an agent isn't a graph and can't suspend).</p>
+  </div>
+</section>
+
+<!-- ================= 1. TODAY ================= -->
+<section id="today">
+  <div class="sec-head">
+    <span class="eyebrow">1 · What runs today</span>
+    <h2>One dispatch over the bus, end to end</h2>
+    <p class="muted">A LangGraph run suspends at the Executor, the agent works from its own inbox topic,
+       and every reply — from every agent — lands on one shared topic that only the gateway's ReplyRouter consumes.</p>
+  </div>
+
+  <div class="panel scroll">
+    <div class="seq">
+      <div class="ll l1"></div><div class="ll l2"></div><div class="ll l3"></div>
+
+      <div class="lanes">
+        <div class="lane"><b>Gateway</b><span>:8000 · LangGraph run</span></div>
+        <div class="lane"><b>Kafka bus</b><span>topics + headers</span></div>
+        <div class="lane"><b>Agent service</b><span>:8010+ · run_agent harness</span></div>
+      </div>
+
+      <div class="seq-row">
+        <div class="self c1"><span class="n">1</span>Executor · send_via_bus()
+          <span class="sub">upserts a2a_awaiting → Mongo before producing</span></div>
+      </div>
+
+      <div class="seq-row">
+        <div class="arr rt s12">
+          <span class="lbl"><span class="n">2</span>request → <span class="t">genie.agents.{agent}.inbox</span>
+            <span class="sub">headers: correlation_id · attempt · reply_to · deadline · group_id</span></span>
+          <div class="line"></div>
+        </div>
+      </div>
+
+      <div class="seq-row">
+        <div class="self c1"><span class="n">3</span>interrupt() — run suspends
+          <span class="sub">durable checkpoint; correlation_id is deterministic (uuid5)</span></div>
+      </div>
+
+      <div class="seq-row">
+        <div class="arr rt s23">
+          <span class="lbl"><span class="n">4</span>deliver · group <span class="t plain">genie-agent-{id}</span>
+            <span class="sub">dedup claim (cid, attempt) → Redis · poison pill → DLQ, no reply</span></span>
+          <div class="line"></div>
+        </div>
+      </div>
+
+      <div class="seq-row">
+        <div class="self c3"><span class="n">5</span>agent.run(state)
+          <span class="sub">worker thread; business failure = failed Task, not DLQ</span></div>
+      </div>
+
+      <div class="seq-row">
+        <div class="arr lt s23">
+          <span class="lbl"><span class="n">6</span>reply (Task JSON) → <span class="t ctrl">genie.replies</span>
+            <span class="sub">reply_to header · shared by every agent — see § 3</span></span>
+          <div class="line"></div>
+        </div>
+      </div>
+
+      <div class="seq-row">
+        <div class="arr lt s12">
+          <span class="lbl"><span class="n">7</span>ReplyRouter consumes <span class="t ctrl">genie.replies</span>
+            <span class="sub">claim dedup:reply:{cid} → Redis · resolve awaiting (Mongo status CAS)</span></span>
+          <div class="line"></div>
+        </div>
+      </div>
+
+      <div class="seq-row">
+        <div class="self c1"><span class="n">8</span>group pending = 0 → resume
+          <span class="sub">claim dedup:resume:{group} · graph.invoke(Command(resume)) → Gate → Synthesizer</span></div>
+      </div>
+    </div>
+
+    <div class="stores">
+      <div class="store"><b>MongoDB · a2a_awaiting</b>
+        one record per dispatch: status, group_id, deadline, serialized request — what the Supervisor retries from.</div>
+      <div class="store"><b>Redis · dedup claims</b>
+        inbox (cid, attempt) · dedup:reply:{cid} · dedup:resume:{group} — at-least-once delivery, exactly-once effect.</div>
+      <div class="store"><b>Sync path (unchanged)</b>
+        transport="json-rpc" agents and all BaseAgent.call_peer calls stay blocking JSON-RPC over HTTP.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 2. CONTROL PLANE ================= -->
+<section id="ctrl">
+  <div class="sec-head">
+    <span class="eyebrow ctrl">2 · Control plane</span>
+    <h2>Supervisor: the failure ladder</h2>
+    <p class="muted">A separate process (<code>services/supervisor</code>) sweeps expired
+      <code>a2a_awaiting</code> records. It never touches the graph — all unblocking flows back through the bus.</p>
+  </div>
+
+  <div class="panel">
+    <p style="font-family:var(--mono); font-size:12.5px">deadline expired →</p>
+    <div class="ladder">
+      <div class="rung"><b>EXTEND</b>agent heartbeat healthy and extensions left — slow, not dead. Push the deadline out.</div>
+      <div class="rung"><b>RETRY</b>attempts left — re-produce to the inbox with attempt+1. Deterministic cid keeps it deduped.</div>
+      <div class="rung dead"><b>DEAD-LETTER</b>exhausted — publish to <span class="t warn">genie.dlq</span> with the error header.</div>
+    </div>
+    <div class="stores">
+      <div class="store"><b>DLQ consumer</b>
+        Supervisor permanently consumes <span class="t warn">genie.dlq</span> and produces
+        <span class="t ctrl">step.cancelled</span> to the reply topic — the waiting run unblocks immediately
+        and the Gate → Planner loop re-plans (fallback agent or partial answer).</div>
+      <div class="store"><b>Replay</b>
+        <code>scripts/replay_dlq.py</code> re-produces dead letters after a fix.
+        With the Supervisor disabled, the gateway's simpler timeout sweep runs instead.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 3. THE GAP ================= -->
+<section id="gap">
+  <div class="sec-head">
+    <span class="eyebrow warn">3 · The gap</span>
+    <h2>Topic names are not a security boundary</h2>
+    <p class="muted">Today every process connects with the same broker credential. The code never subscribes across
+       agents — but Kafka doesn't enforce the code's conventions. Who can actually read what:</p>
+  </div>
+
+  <div class="panel scroll">
+    <div class="minw">
+      <div class="topicrows">
+        <div class="trow thead"><span>topic</span><span>intended reader</span><span>actual readability today</span></div>
+        <div class="trow"><span><span class="t">genie.agents.{a}.inbox</span></span>
+          <span>agent <i>a</i> only</span>
+          <span class="who">any process with the bus credential</span></div>
+        <div class="trow"><span><span class="t ctrl">genie.replies</span> <span class="muted">(shared)</span></span>
+          <span>gateway ReplyRouter</span>
+          <span class="who">any process with the bus credential</span></div>
+        <div class="trow"><span><span class="t warn">genie.dlq</span></span>
+          <span>Supervisor</span>
+          <span class="who">any process with the bus credential</span></div>
+      </div>
+
+      <div class="abuse">
+        <div><b>Read every reply.</b> Subscribe <code>genie.replies</code> with a fresh consumer group —
+          full Task output of every agent, every team. Consumer groups are namespaces, not permissions.</div>
+        <div><b>Read another agent's inbox.</b> Often worse than replies: requests carry the args
+          <em>and the blackboard snapshot</em> of the run.</div>
+        <div><b>Forge a reply.</b> Observe a <code>correlation_id</code> on the wire, produce a fake Task
+          to <code>genie.replies</code> — the ReplyRouter resolves it and resumes the victim's run with attacker data.</div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note warn"><b>Conclusion:</b> the fix is broker-enforced identity + ACLs, not topic layout.
+     Renaming or splitting topics changes nothing while every client holds the same key.</p>
+</section>
+
+<!-- ================= 4. TARGET ================= -->
+<section id="target">
+  <div class="sec-head">
+    <span class="eyebrow">4 · Multi-team target</span>
+    <h2>Per-team namespaces, per-principal ACLs</h2>
+    <p class="muted">Keep the shared-reply-topic pattern — but one per team, with the broker enforcing who
+       reads and writes it. Invocation rights live in the Registry and are checked at dispatch.</p>
+  </div>
+
+  <div class="aclbar">
+    <b>KAFKA BROKER</b>
+    <span>SASL/mTLS — every agent, gateway and supervisor gets its <em>own</em> principal</span>
+    <span>·</span><span>ACLs per principal (matrix below)</span>
+    <span>·</span><span>TLS on the wire</span>
+  </div>
+
+  <div class="teams">
+    <div class="team">
+      <header><b>namespace · team-a</b><span>gateway + ReplyRouter (team A)</span></header>
+      <ul>
+        <li><span class="role">inboxes</span>
+          <span class="t">genie.team-a.agents.weather.inbox</span>
+          <span class="t">genie.team-a.agents.rag.inbox</span></li>
+        <li><span class="role">replies</span><span class="t ctrl">genie.team-a.replies</span>
+          <span class="muted" style="font-size:11px">— consumed only by team A's gateway</span></li>
+        <li><span class="role">dlq</span><span class="t warn">genie.team-a.dlq</span></li>
+        <li><span class="role">principals</span>
+          <span class="t plain">gw-team-a</span><span class="t plain">agent-team-a-weather</span><span class="t plain">agent-team-a-rag</span></li>
+      </ul>
+    </div>
+    <div class="team">
+      <header><b>namespace · team-b</b><span>gateway + ReplyRouter (team B)</span></header>
+      <ul>
+        <li><span class="role">inboxes</span>
+          <span class="t">genie.team-b.agents.outage.inbox</span></li>
+        <li><span class="role">replies</span><span class="t ctrl">genie.team-b.replies</span>
+          <span class="muted" style="font-size:11px">— consumed only by team B's gateway</span></li>
+        <li><span class="role">dlq</span><span class="t warn">genie.team-b.dlq</span></li>
+        <li><span class="role">principals</span>
+          <span class="t plain">gw-team-b</span><span class="t plain">agent-team-b-outage</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="panel scroll">
+    <div class="minw">
+      <table>
+        <thead><tr><th>principal</th><th>read</th><th>write</th><th>why</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>agent-team-a-weather</td>
+            <td><span class="t">genie.team-a.agents.weather.inbox</span></td>
+            <td><span class="t ctrl">genie.team-a.replies</span> <span class="t warn">genie.team-a.dlq</span></td>
+            <td>consume own inbox only; reply where its callers listen; dead-letter poison pills.</td>
+          </tr>
+          <tr>
+            <td>gw-team-a</td>
+            <td><span class="t ctrl">genie.team-a.replies</span></td>
+            <td>inboxes of agents team A may invoke</td>
+            <td>ReplyRouter consumes its own reply topic; produce rights mirror Registry invocation grants.</td>
+          </tr>
+          <tr>
+            <td>supervisor-team-a</td>
+            <td><span class="t warn">genie.team-a.dlq</span></td>
+            <td><span class="t">genie.team-a.agents.*.inbox</span> <span class="t ctrl">genie.team-a.replies</span></td>
+            <td>retries re-produce to inboxes; step.cancelled unblocks runs via the reply topic.</td>
+          </tr>
+          <tr>
+            <td>cross-team grant</td>
+            <td colspan="2">gw-team-a +write <span class="t">genie.team-b.agents.outage.inbox</span> ·
+                agent-team-b-outage +write <span class="t ctrl">genie.team-a.replies</span></td>
+            <td>a call across teams is two explicit ACLs, recorded in the Registry — never a wildcard.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <p class="note"><b>Two layers, both required:</b> Kafka ACLs control <em>topic access</em>; the Registry
+     (<code>AgentMeta</code> gains <code>team</code> + <code>allowed_callers</code>) controls <em>invocation</em> —
+     the gateway checks it before producing. The <code>reply_to</code> header already routes replies per request,
+     so agents need no protocol change.</p>
+
+  <div class="panel">
+    <h3 style="margin-bottom:10px">Code delta — smaller than it sounds</h3>
+    <ol class="delta">
+      <li><code>messaging/envelope.py</code> — make <code>inbox_topic()</code> / <code>reply_topic()</code> /
+          <code>dlq_topic()</code> team-aware; actually populate <code>HDR_TENANT_ID</code>
+          (the client already threads <code>tenant_id</code> through).</li>
+      <li><code>platform/config.py</code> — team identity per deployment; per-principal broker credentials
+          in <code>local.yaml</code> / env, never <code>default.yaml</code>.</li>
+      <li><code>interface/reply_router.py</code> — subscribe <code>genie.{team}.replies</code> instead of the global topic.</li>
+      <li><code>registry/agent_meta.py</code> + gateway dispatch — <code>team</code>, <code>allowed_callers</code>,
+          enforce at <code>send_via_bus()</code> time.</li>
+      <li>Broker provisioning — an admin script (or Terraform) that creates principals + the ACL matrix above
+          whenever an agent registers.</li>
+      <li>Optional, only if broker admins are outside the trust domain: per-team envelope encryption of the
+          Kafka <em>value</em> — headers stay plaintext so routing on headers keeps working.</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ================= 5. CROSS-ORG ================= -->
+<section id="xorg">
+  <div class="sec-head">
+    <span class="eyebrow edge">5 · Cross-org</span>
+    <h2>The bus never crosses the org boundary</h2>
+    <p class="muted">Never hand another organization credentials to your cluster — shared blast radius, leaked
+       metadata, operational coupling. The trust boundary lives at an HTTPS edge, where real authn/authz,
+       audit and rate limiting exist. Your agents are already A2A services; that protocol <em>is</em> the
+       cross-org transport.</p>
+  </div>
+
+  <div class="panel scroll">
+    <div class="minw xorg">
+      <div class="org">
+        <h3>org 1</h3>
+        <div class="businner">
+          <span style="font-family:var(--mono); font-size:11.5px"><b>internal Kafka bus</b></span>
+          <span><span class="t">team-a</span> <span class="t">team-b</span> namespaces + ACLs (§ 4)</span>
+          <span class="muted" style="font-size:11.5px">gateway · agents · supervisor</span>
+        </div>
+        <p class="noline" style="margin-top:8px">edge bridge: consumes local bus ↔ speaks A2A outward,
+           feeds replies back to <span class="t ctrl">genie.{team}.replies</span></p>
+      </div>
+
+      <div class="bridge">
+        <span class="wire">⇢ &nbsp;A2A over HTTPS&nbsp; ⇠</span>
+        <div class="pipe"><b>EDGE, NOT BUS</b><br>
+          agent card discovery<br>OAuth / mTLS per partner<br>audit log · rate limits</div>
+        <span class="noline">no broker credentials exchanged</span>
+      </div>
+
+      <div class="org">
+        <h3>org 2</h3>
+        <div class="businner">
+          <span style="font-family:var(--mono); font-size:11.5px"><b>their own bus (or none)</b></span>
+          <span>whatever they run internally — invisible to org 1</span>
+          <span class="muted" style="font-size:11.5px">their agents expose A2A endpoints</span>
+        </div>
+        <p class="noline" style="margin-top:8px">async semantics? their bridge produces into
+           <em>their</em> bus with credentials <em>they</em> issued themselves</p>
+      </div>
+    </div>
+  </div>
+
+  <p class="note" style="border-left-color:var(--edge); background:var(--edge-soft)">
+     <b>Rule of thumb:</b> Kafka inside a trust domain, A2A HTTPS between trust domains.
+     A cross-org call looks exactly like a <code>transport="json-rpc"</code> agent to the Executor — no graph changes.</p>
+</section>
+
+<footer>
+  sources: src/genie/a2a/client.py (send_via_bus) · src/genie/agents/server.py (inbox consumer, reply produce) ·
+  src/genie/interface/reply_router.py · src/genie/messaging/{envelope, supervisor, awaiting, dedup}.py<br>
+  topic defaults: {bus_topic_prefix}.agents.{id}.inbox · {prefix}.replies · {prefix}.dlq — prefix "genie"
+</footer>
+
+</div>
+</body>
+</html>

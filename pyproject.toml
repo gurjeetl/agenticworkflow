@@ -44,6 +44,8 @@ dependencies = [
     # --- RAG service boundary (shared wire contracts; editable local package) ---
     "genie-rag-contracts",
     "a2a-sdk>=1.1.0",
+    "aiokafka>=0.14.0",
+    "langgraph-checkpoint-mongodb>=0.4.0",
 ]
 
 [project.optional-dependencies]
@@ -74,6 +76,9 @@ llm-guard = { path = "vendor/llm-guard" }
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+markers = [
+    "kafka: end-to-end tests that need a real Kafka/Redpanda broker (set KAFKA_BOOTSTRAP_SERVERS)",
+]
 
 [tool.importlinter]
 root_packages = ["genie", "applications", "genie_rag_contracts"]

@@ -13,7 +13,6 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from genie.agents.base import BaseAgent, make_chat_model, patch
 from genie.platform.config import get_settings
-from genie.platform.events import Events
 from genie.llm.client import LLMClient
 from genie.memory.facts_store import get_facts_store
 from genie.memory.vector_store import get_vector_store
